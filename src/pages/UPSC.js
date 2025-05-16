@@ -2,12 +2,15 @@ import React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth, Profile } from "../App";
 
+// Import the background image for UPSC Prelims card
+import upscPrelimsImage from "../assets/prelim2.jpg";
+
 const UPSC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
 
   const handleLogin = () => {
-    navigate("/login", { state: { from: "/" } }); // Updated "from" to "/" since UPSC.js is now the homepage
+    navigate("/login", { state: { from: "/" } });
   };
 
   return (
@@ -33,25 +36,28 @@ const UPSC = () => {
       </nav>
 
       <div className="flex-1">
-        <div className="fixed top-16 left-0 w-full bg-gradient-to-br from-gray-800 to-gray-900 p-3 sm:p-4 shadow-md z-40">
-          <p className="text-center text-gray-200 text-sm sm:text-base md:text-lg leading-relaxed max-w-3xl mx-auto">
-            In their own  comfort everyone is a warrior but the true warrior is one who proves his worth in <span className="text-indigo-400 font-bold">BattleGround</span> - I am an <span className="text-indigo-400 font-bold">AI</span> trained on extensive <span className="text-indigo-400 font-bold">UPSC material</span>, let me help you train for your <span className="text-indigo-400 font-bold">UPSC Battle</span> with my accurate and quality-based <span className="text-indigo-400 font-bold">MCQ</span> specifically designed keeping <span className="text-indigo-400 font-bold">UPSC structure</span> in mind. Let's start your Training with <span className="text-indigo-400 font-bold">TrainWithMe</span>.
-          </p>
-        </div>
-
-        <div className="flex items-center justify-center h-full pt-72 sm:pt-92 px-4 sm:px-6">
+        {/* Removed the text block */}
+        <div className="flex items-center justify-center h-full pt-28 sm:pt-36 px-4 sm:px-6">
           <div className="flex flex-col sm:flex-row justify-center items-center gap-6 sm:gap-12">
             <Link to="/upsc-prelims">
-              <div className="relative w-48 h-48 sm:w-56 sm:h-56 bg-gradient-to-br from-indigo-500 to-indigo-700 rounded-xl shadow-lg flex items-center justify-center text-lg sm:text-xl font-bold text-white transition-all duration-300 transform hover:scale-105 hover:shadow-2xl hover:from-indigo-600 hover:to-indigo-800 group">
+              <div
+                className="relative w-64 h-64 sm:w-80 sm:h-80 bg-gradient-to-br from-indigo-500 to-indigo-700 rounded-xl shadow-lg flex items-center justify-center text-xl sm:text-2xl font-bold text-white transition-all duration-300 transform hover:scale-105 hover:shadow-2xl hover:from-indigo-600 hover:to-indigo-800 group"
+                style={{
+                  backgroundImage: `url(${upscPrelimsImage})`,
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center',
+                  backgroundRepeat: 'no-repeat',
+                }}
+              >
                 <span className="relative z-10">UPSC Prelims</span>
                 <div className="absolute inset-0 rounded-xl bg-indigo-400 opacity-0 group-hover:opacity-20 transition-opacity duration-300"></div>
               </div>
             </Link>
 
-            <div className="relative w-48 h-48 sm:w-56 sm:h-56 bg-gradient-to-br from-gray-600 to-gray-700 rounded-xl shadow-lg flex items-center justify-center text-lg sm:text-xl font-bold text-gray-400 transition-all duration-300 transform opacity-60">
+            <div className="relative w-64 h-64 sm:w-80 sm:h-80 bg-gradient-to-br from-gray-600 to-gray-700 rounded-xl shadow-lg flex items-center justify-center text-xl sm:text-2xl font-bold text-gray-400 transition-all duration-300 transform opacity-60">
               <div className="text-center">
                 <span>UPSC Mains</span>
-                <p className="text-xs sm:text-sm mt-2 text-gray-500">Coming Soon</p>
+                <p className="text-sm sm:text-base mt-2 text-gray-500">Coming Soon</p>
               </div>
               <div className="absolute inset-0 rounded-xl bg-gray-500 opacity-0 transition-opacity duration-300"></div>
             </div>

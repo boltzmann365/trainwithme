@@ -1,14 +1,14 @@
 import React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../../App";
+import laxmikanthImage from "../../assets/laxmikanth.jpeg";
 
 const Polity = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
 
   const BOOKS = [
-    { name: "Laxmikanth", path: "/laxmikanth" },
-    // Add more books in the future, e.g., { name: "Another Book", path: "/another-book" }
+    { name: "Laxmikanth", path: "/laxmikanth", image: laxmikanthImage },
   ];
 
   const handleGoBack = () => {
@@ -51,52 +51,41 @@ const Polity = () => {
         </div>
       </nav>
 
-      <div className="pt-16 pb-10 px-4 sm:px-6 lg:px-8 w-full overflow-hidden">
-        <div className="h-[calc(100vh-4rem)] w-full overflow-y-auto">
-          {/* Enter Polity Battleground Button Section */}
-          <div className="pt-8 pb-6 flex justify-center">
-            <Link to="/polity-battleground" onClick={handleCardClick("/polity-battleground")}>
-              <button
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-8 py-4 rounded-lg shadow-lg hover:from-blue-700 hover:to-indigo-700 transition-all duration-300 transform hover:scale-105 text-lg sm:text-xl font-semibold"
+      <div className="pt-16 px-4 sm:px-6 lg:px-8 w-full">
+        {/* Laxmikanth Card Positioned Below Navbar in the Left Corner with Original Width */}
+        <div className="absolute top-20 left-4 sm:left-6 lg:left-8">
+          {BOOKS.map((book, index) => (
+            <Link
+              key={index}
+              to={book.path}
+              onClick={handleCardClick(book.path)}
+            >
+              <div
+                className="relative w-[350px] sm:w-[300px] lg:w-[450px] h-48 sm:h-56 lg:h-64 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-2xl group cursor-pointer"
+                style={{
+                  backgroundImage: book.image ? `url(${book.image})` : 'none',
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center',
+                  backgroundRepeat: 'no-repeat',
+                }}
               >
-                Enter Polity Battleground
-              </button>
-            </Link>
-          </div>
-
-          {/* Separator and Popular Books Header */}
-          <div className="text-center mb-6">
-            <p className="text-gray-400 text-lg sm:text-xl font-medium">OR</p>
-            <h3 className="mt-2 text-2xl sm:text-3xl lg:text-4xl font-bold text-gray-50 tracking-tight">
-              Train on Popular Books
-            </h3>
-          </div>
-
-          {/* Popular Books Section */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 px-2 sm:px-4 lg:px-8">
-            {BOOKS.map((book, index) => (
-              <Link
-                key={index}
-                to={book.path}
-                onClick={handleCardClick(book.path)}
-              >
-                <div className="relative w-full h-48 sm:h-56 lg:h-64 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-2xl group cursor-pointer bg-gradient-to-br from-gray-800 to-gray-900">
-                  {/* Book Spine Effect */}
-                  <div className="absolute left-0 top-0 bottom-0 w-4 sm:w-6 bg-gray-800 opacity-80 rounded-l-lg shadow-lg">
-                    <div className="h-full w-1 bg-gray-700 opacity-90 absolute left-0 top-0"></div>
-                  </div>
-                  {/* Book Cover */}
-                  <div className="absolute left-4 sm:left-6 right-0 top-0 bottom-0 bg-gradient-to-br from-gray-800 to-gray-900 rounded-r-lg p-4 sm:p-6 flex flex-col justify-center items-center">
-                    <span className="text-white text-center font-bold text-sm sm:text-lg lg:text-xl line-clamp-3">
-                      {book.name}
-                    </span>
-                  </div>
-                  {/* 3D Shadow Effect */}
-                  <div className="absolute inset-0 rounded-lg shadow-[inset_-2px_2px_8px_rgba(0,0,0,0.3)] group-hover:shadow-[inset_-4px_4px_12px_rgba(0,0,0,0.4)] transition-shadow duration-300"></div>
+                {/* Overlay for readability */}
+                <div className="absolute inset-0 bg-black bg-opacity-50 rounded-lg group-hover:bg-opacity-40 transition-opacity duration-300"></div>
+                {/* Book Spine Effect */}
+                <div className="absolute left-0 top-0 bottom-0 w-4 sm:w-6 bg-gray-800 opacity-80 rounded-l-lg shadow-lg">
+                  <div className="h-full w-1 bg-gray-700 opacity-90 absolute left-0 top-0"></div>
                 </div>
-              </Link>
-            ))}
-          </div>
+                {/* Book Cover */}
+                <div className="absolute left-4 sm:left-6 right-0 top-0 bottom-0 rounded-r-lg p-4 sm:p-6 flex flex-col justify-center items-center">
+                  <span className="text-white text-center font-bold text-sm sm:text-lg lg:text-xl line-clamp-3 z-10">
+                    {book.name}
+                  </span>
+                </div>
+                {/* 3D Shadow Effect */}
+                <div className="absolute inset-0 rounded-lg shadow-[inset_-2px_2px_8px_rgba(0,0,0,0.3)] group-hover:shadow-[inset_-4px_4px_12px_rgba(0,0,0,0.4)] transition-shadow duration-300"></div>
+              </div>
+            </Link>
+          ))}
         </div>
       </div>
     </div>

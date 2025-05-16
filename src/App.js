@@ -24,7 +24,8 @@ import RameshSingh from "./pages/subjects/RameshSingh";
 import DishaCSAT from "./pages/subjects/DishaCSAT";
 import VisionIasDec2024 from "./pages/subjects/VisionIasDec2024";
 import DishaIasPreviousYearPaper from "./pages/subjects/DishaIasPreviousYearPaper";
-import DishaIasScience from "./pages/subjects/DishaIasScience"; // Added import for DishaIasScience.js
+import DishaIasScience from "./pages/subjects/DishaIasScience";
+import Battleground from "./pages/subjects/Battleground";
 
 const AuthContext = createContext();
 
@@ -33,10 +34,23 @@ export const useAuth = () => useContext(AuthContext);
 const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
 
+  // Deep comparison function to avoid unnecessary user state updates
+  const areUsersEqual = (prevUser, newUser) => {
+    if (prevUser === newUser) return true;
+    if (!prevUser || !newUser) return false;
+    return (
+      prevUser.email === newUser.email &&
+      prevUser.googleId === newUser.googleId &&
+      prevUser.username === newUser.username
+    );
+  };
+
   useEffect(() => {
     const savedUser = localStorage.getItem("user");
     if (savedUser) {
-      setUser(JSON.parse(savedUser));
+      const parsedUser = JSON.parse(savedUser);
+      console.log("AuthProvider: Loading user from localStorage:", parsedUser);
+      setUser(parsedUser);
     }
   }, []);
 
@@ -46,6 +60,7 @@ const AuthProvider = ({ children }) => {
     } else {
       localStorage.removeItem("user");
     }
+    console.log("AuthProvider: user state updated:", user);
   }, [user]);
 
   // Helper function to save user data to the server
@@ -70,7 +85,7 @@ const AuthProvider = ({ children }) => {
     } catch (error) {
       console.error("Error saving user to server:", error.message);
       if (setError) {
-        setError(error.message); // Update error state to display to the user
+        setError(error.message);
       }
       return false;
     }
@@ -94,7 +109,14 @@ const AuthProvider = ({ children }) => {
       googleId,
       username: existingUsername || null,
     };
-    setUser(newUser);
+
+    // Only update user state if the new user is different
+    if (!areUsersEqual(user, newUser)) {
+      console.log("AuthProvider: Setting new user from signupWithGoogle:", newUser);
+      setUser(newUser);
+    } else {
+      console.log("AuthProvider: User unchanged in signupWithGoogle, skipping setUser");
+    }
 
     return !existingUsername; // True if new user, false if existing
   };
@@ -109,6 +131,7 @@ const AuthProvider = ({ children }) => {
       // Save user data to the server after setting username
       saveUserToServer(prev.email, username, setError);
 
+      console.log("AuthProvider: Setting username, updated user:", updatedUser);
       return updatedUser;
     });
   };
@@ -129,7 +152,13 @@ const AuthProvider = ({ children }) => {
 
     if (savedUser && savedUser.googleId === googleId) {
       const updatedUser = { ...savedUser, username: existingUsername || savedUser.username };
-      setUser(updatedUser);
+      // Only update user state if the new user is different
+      if (!areUsersEqual(user, updatedUser)) {
+        console.log("AuthProvider: Setting user from loginWithGoogle:", updatedUser);
+        setUser(updatedUser);
+      } else {
+        console.log("AuthProvider: User unchanged in loginWithGoogle, skipping setUser");
+      }
 
       // Save user data to the server on login
       saveUserToServer(email, updatedUser.username);
@@ -142,6 +171,7 @@ const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
+    console.log("AuthProvider: Logging out user");
     setUser(null);
     localStorage.removeItem("user");
   };
@@ -204,6 +234,7 @@ function App() {
         <Routes>
           <Route path="/" element={<UPSC />} />
           <Route path="/upsc-prelims" element={<UPSCPrelims />} />
+          <Route path="/battleground" element={<ProtectedRoute><Battleground /></ProtectedRoute>} /> {/* New route */}
           <Route path="/login" element={<LoginSignup />} />
           <Route path="/polity" element={<ProtectedRoute><Polity /></ProtectedRoute>} />
           <Route path="/laxmikanth" element={<ProtectedRoute><Laxmikanth /></ProtectedRoute>} />
@@ -220,7 +251,7 @@ function App() {
           <Route path="/history/spectrum" element={<ProtectedRoute><Spectrum /></ProtectedRoute>} />
           <Route path="/history/art-and-culture" element={<ProtectedRoute><ArtAndCulture /></ProtectedRoute>} />
           <Route path="/science" element={<ProtectedRoute><Science /></ProtectedRoute>} />
-          <Route path="/disha-ias-science" element={<ProtectedRoute><DishaIasScience /></ProtectedRoute>} /> {/* Added route for DishaIasScience */}
+          <Route path="/disha-ias-science" element={<ProtectedRoute><DishaIasScience /></ProtectedRoute>} />
           <Route path="/environment" element={<ProtectedRoute><Environment /></ProtectedRoute>} />
           <Route path="/economy" element={<ProtectedRoute><Economy /></ProtectedRoute>} />
           <Route path="/current-affairs" element={<ProtectedRoute><CurrentAffairs /></ProtectedRoute>} />
