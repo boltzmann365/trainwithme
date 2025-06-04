@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../App";
+import axios from "axios";
 
 const Laxmikanth = () => {
   const navigate = useNavigate();
@@ -13,9 +14,9 @@ const Laxmikanth = () => {
   const [isWisModeSelected, setIsWisModeSelected] = useState(false);
   const [questionLimit, setQuestionLimit] = useState(25);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [questions, setQuestions] = useState([]); // Array of MCQs (100 in LAW mode, user-specified in WIS mode)
-  const [userAnswers, setUserAnswers] = useState([]); // Answers for all seen MCQs
-  const [questionStatuses, setQuestionStatuses] = useState([]); // Statuses for all seen MCQs
+  const [questions, setQuestions] = useState([]);
+  const [userAnswers, setUserAnswers] = useState([]);
+  const [questionStatuses, setQuestionStatuses] = useState([]);
   const [score, setScore] = useState(null);
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
@@ -27,8 +28,7 @@ const Laxmikanth = () => {
   const [isUpbarOpen, setIsUpbarOpen] = useState(false);
   const [isScoreMinimized, setIsScoreMinimized] = useState(false);
   const [filter, setFilter] = useState("all");
-  const [lawModeBatchStart, setLawModeBatchStart] = useState(0); // Tracks the starting position of the current batch in LAW mode
-
+  const [lawModeBatchStart, setLawModeBatchStart] = useState(0);
   const [scoreDetails, setScoreDetails] = useState({
     totalQuestions: 0,
     attempted: 0,
@@ -38,20 +38,22 @@ const Laxmikanth = () => {
     totalScore: 0,
     percentage: 0,
   });
-
   const [maxQuestionReached, setMaxQuestionReached] = useState(0);
+  const [fontSize, setFontSize] = useState(24);
+  const [pendingMode, setPendingMode] = useState("LAW");
+  const [pendingQuestionLimit, setPendingQuestionLimit] = useState(25);
 
-  // Log filter changes
+  const API_URL = "https://new-backend-tx3z.onrender.com";
+  const LAW_MODE_BATCH_SIZE = 100;
+
   useEffect(() => {
     console.log("filter state updated:", filter);
   }, [filter]);
 
-  // Log questionStatuses changes for debugging
   useEffect(() => {
     console.log("questionStatuses updated:", questionStatuses);
   }, [questionStatuses]);
 
-  // Ensure popup shows on mount
   useEffect(() => {
     console.log("Laxmikanth component mounted, showModePopup:", showModePopup);
     setShowModePopup(true);
@@ -60,24 +62,16 @@ const Laxmikanth = () => {
   const getUserId = () => {
     if (user?.email) {
       const emailLower = user.email.toLowerCase();
-      return emailLower.endsWith('@gmail.com')
-        ? emailLower.split('@')[0]
-        : emailLower;
+      return emailLower.endsWith('@gmail.com') ? emailLower.split('@')[0] : emailLower;
     }
-
     const storedUserId = localStorage.getItem('trainWithMeUserId');
-    if (storedUserId) {
-      return storedUserId;
-    }
-
+    if (storedUserId) return storedUserId;
     const newUserId = Math.random().toString(36).substring(7);
     localStorage.setItem('trainWithMeUserId', newUserId);
     return newUserId;
   };
 
   const userId = useRef(getUserId()).current;
-
-  const [fontSize, setFontSize] = useState(24);
 
   useEffect(() => {
     const questionBox = document.querySelector('.question-box');
@@ -94,10 +88,8 @@ const Laxmikanth = () => {
         const style = window.getComputedStyle(chapterText);
         pElementsHeight += chapterText.offsetHeight + parseFloat(style.marginBottom);
       }
-
       const paddingHeight = 16;
       const effectiveHeight = questionBox.clientHeight - pElementsHeight - paddingHeight;
-
       let currentFontSize = 24;
       content.style.fontSize = `${currentFontSize}px`;
       while (content.scrollHeight > effectiveHeight && currentFontSize > 8) {
@@ -108,179 +100,142 @@ const Laxmikanth = () => {
     }
   }, [questions, currentQuestionIndex]);
 
-  const API_URL = "https://trainwithme-backend.onrender.com";
-  const LAW_MODE_BATCH_SIZE = 100; // Number of MCQs to fetch per batch in LAW mode
-
- const fetchUserMCQs = async () => {
-  setLoading(true);
-  setLoadingMessage("Loading MCQs...");
-  setError(null);
-
-  try {
-    console.log("Fetching MCQs with userId:", userId, "questionLimit:", questionLimit);
-    if (!userId) {
-      throw new Error("userId is undefined or empty");
-    }
-    const validRequestedCount = (typeof questionLimit === "number" && questionLimit > 0) ? questionLimit : 25;
-    console.log("Using requestedCount:", validRequestedCount);
-
-    const response = await fetch(`${API_URL}/user/get-book-mcqs`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, book: "Polity", requestedCount: validRequestedCount }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      if (response.status === 404) {
-        throw new Error(errorData.error || "No new MCQs available for this user.");
+  const fetchUserMCQs = async () => {
+    setLoading(true);
+    setLoadingMessage("Loading MCQs...");
+    setError(null);
+    try {
+      console.log("Fetching MCQs with userId:", userId, "questionLimit:", questionLimit);
+      if (!userId) throw new Error("userId is undefined or empty");
+      const validRequestedCount = (typeof questionLimit === "number" && questionLimit > 0) ? questionLimit : 25;
+      console.log("Using requestedCount:", validRequestedCount);
+      const response = await fetch(`${API_URL}/user/get-book-mcqs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, book: "Polity", requestedCount: validRequestedCount }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        if (response.status === 404) throw new Error(errorData.error || "No new MCQs available for this user.");
+        throw new Error(`Failed to fetch MCQs: HTTP ${response.status}`);
       }
-      throw new Error(`Failed to fetch MCQs: HTTP ${response.status}`);
+      const data = await response.json();
+      if (!data.mcqs || data.mcqs.length === 0) throw new Error("No new MCQs available for this user.");
+      const transformedMCQs = data.mcqs
+        .filter(mcq => {
+          if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
+            console.warn("Invalid MCQ found and skipped:", mcq);
+            return false;
+          }
+          return true;
+        })
+        .map(mcq => ({
+          question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
+          options: mcq.mcq.options,
+          correctAnswer: mcq.mcq.correctAnswer,
+          explanation: mcq.mcq.explanation,
+          chapter: mcq.chapter,
+          id: mcq._id
+        }));
+      if (transformedMCQs.length === 0) throw new Error("No valid MCQs available after filtering.");
+      setQuestions(transformedMCQs);
+      setUserAnswers(new Array(transformedMCQs.length).fill(null));
+      setQuestionStatuses(new Array(transformedMCQs.length).fill("unattempted"));
+      setCurrentQuestionIndex(0);
+      setScore(null);
+      setSelectedOption(null);
+      setShowExplanation(false);
+      setReportMessage(null);
+      setShowScorePopup(false);
+      setIsUpbarOpen(false);
+      setIsScoreMinimized(false);
+      setTestStarted(true);
+      setShowModePopup(false);
+      console.log(`fetchUserMCQs: Loaded ${transformedMCQs.length} MCQs for user ${userId}`);
+    } catch (err) {
+      let errorMessage = "Failed to load MCQs. Please try again later.";
+      if (err.message.includes("Failed to fetch")) {
+        errorMessage = "Unable to connect to the server. Please ensure the backend server is running and try again.";
+      }
+      setError(errorMessage);
+      setTestStarted(false);
+      setShowModePopup(true);
+      console.error("fetchUserMCQs error:", err.message);
+    } finally {
+      setLoading(false);
     }
-
-    const data = await response.json();
-    if (!data.mcqs || data.mcqs.length === 0) {
-      throw new Error("No new MCQs available for this user.");
-    }
-
-    const transformedMCQs = data.mcqs
-      .filter(mcq => {
-        if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
-          console.warn("Invalid MCQ found and skipped:", mcq);
-          return false;
-        }
-        return true;
-      })
-      .map(mcq => ({
-        question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
-        options: mcq.mcq.options,
-        correctAnswer: mcq.mcq.correctAnswer,
-        explanation: mcq.mcq.explanation,
-        chapter: mcq.chapter,
-        id: mcq._id
-      }));
-
-    if (transformedMCQs.length === 0) {
-      throw new Error("No valid MCQs available after filtering.");
-    }
-
-    setQuestions(transformedMCQs);
-    setUserAnswers(new Array(transformedMCQs.length).fill(null));
-    setQuestionStatuses(new Array(transformedMCQs.length).fill("unattempted"));
-    setCurrentQuestionIndex(0);
-    setScore(null);
-    setSelectedOption(null);
-    setShowExplanation(false);
-    setReportMessage(null);
-    setShowScorePopup(false);
-    setIsUpbarOpen(false);
-    setIsScoreMinimized(false);
-    setTestStarted(true);
-    setShowModePopup(false);
-    console.log(`fetchUserMCQs: Loaded ${transformedMCQs.length} MCQs for user ${userId}`);
-  } catch (err) {
-    let errorMessage = "Failed to load MCQs. Please try again later.";
-    if (err.message.includes("Failed to fetch")) {
-      errorMessage = "Unable to connect to the server. Please ensure the backend server is running and try again.";
-    }
-    setError(errorMessage);
-    setTestStarted(false);
-    setShowModePopup(true);
-    console.error("fetchUserMCQs error:", err.message);
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   const fetchUserMCQsForLawMode = async (batchStart = 0) => {
-  setLoading(true);
-  setLoadingMessage("Loading MCQs...");
-  setError(null);
-
-  try {
-    console.log("Fetching MCQs for LAW mode with userId:", userId, "batchStart:", batchStart);
-    if (!userId) {
-      throw new Error("userId is undefined or empty");
-    }
-
-    const response = await fetch(`${API_URL}/user/get-book-mcqs`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, book: "Polity", requestedCount: LAW_MODE_BATCH_SIZE }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      if (response.status === 404) {
-        throw new Error(errorData.error || "No new MCQs available for this user.");
+    setLoading(true);
+    setLoadingMessage("Loading MCQs...");
+    setError(null);
+    try {
+      console.log("Fetching MCQs for LAW mode with userId:", userId, "batchStart:", batchStart);
+      if (!userId) throw new Error("userId is undefined or empty");
+      const response = await fetch(`${API_URL}/user/get-book-mcqs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, book: "Polity", requestedCount: LAW_MODE_BATCH_SIZE }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        if (response.status === 404) throw new Error(errorData.error || "No new MCQs available for this user.");
+        throw new Error(`Failed to fetch MCQs: HTTP ${response.status}`);
       }
-      throw new Error(`Failed to fetch MCQs: HTTP ${response.status}`);
+      const data = await response.json();
+      if (!data.mcqs || data.mcqs.length === 0) throw new Error("No new MCQs available for this user.");
+      const transformedMCQs = data.mcqs
+        .filter(mcq => {
+          if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
+            console.warn("Invalid MCQ found and skipped:", mcq);
+            return false;
+          }
+          return true;
+        })
+        .map(mcq => ({
+          question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
+          options: mcq.mcq.options,
+          correctAnswer: mcq.mcq.correctAnswer,
+          explanation: mcq.mcq.explanation,
+          chapter: mcq.chapter,
+          id: mcq._id
+        }));
+      if (transformedMCQs.length === 0) throw new Error("No valid MCQs available after filtering.");
+      setQuestions(transformedMCQs);
+      setCurrentQuestionIndex(0);
+      setLawModeBatchStart(batchStart);
+      setSelectedOption(userAnswers[batchStart] || null);
+      setShowExplanation(false);
+      setReportMessage(null);
+      setShowScorePopup(false);
+      setIsUpbarOpen(false);
+      setIsScoreMinimized(false);
+      setTestStarted(true);
+      setShowModePopup(false);
+      console.log(`fetchUserMCQsForLawMode: Loaded ${transformedMCQs.length} MCQs starting at position ${batchStart} for user ${userId}`);
+    } catch (err) {
+      let errorMessage = "Failed to load MCQs. Please try again later.";
+      if (err.message.includes("Failed to fetch")) {
+        errorMessage = "Unable to connect to the server. Please ensure the backend server is running and try again.";
+      }
+      setError(errorMessage);
+      setTestStarted(false);
+      setShowModePopup(true);
+      console.error("fetchUserMCQsForLawMode error:", err.message);
+    } finally {
+      setLoading(false);
     }
-
-    const data = await response.json();
-    if (!data.mcqs || data.mcqs.length === 0) {
-      throw new Error("No new MCQs available for this user.");
-    }
-
-    const transformedMCQs = data.mcqs
-      .filter(mcq => {
-        if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
-          console.warn("Invalid MCQ found and skipped:", mcq);
-          return false;
-        }
-        return true;
-      })
-      .map(mcq => ({
-        question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
-        options: mcq.mcq.options,
-        correctAnswer: mcq.mcq.correctAnswer,
-        explanation: mcq.mcq.explanation,
-        chapter: mcq.chapter,
-        id: mcq._id
-      }));
-
-    if (transformedMCQs.length === 0) {
-      throw new Error("No valid MCQs available after filtering.");
-    }
-
-    setQuestions(transformedMCQs);
-    setCurrentQuestionIndex(0);
-    setLawModeBatchStart(batchStart);
-    setSelectedOption(userAnswers[batchStart] || null);
-    setShowExplanation(false);
-    setReportMessage(null);
-    setShowScorePopup(false);
-    setIsUpbarOpen(false);
-    setIsScoreMinimized(false);
-    setTestStarted(true);
-    setShowModePopup(false);
-    console.log(`fetchUserMCQsForLawMode: Loaded ${transformedMCQs.length} MCQs starting at position ${batchStart} for user ${userId}`);
-  } catch (err) {
-    let errorMessage = "Failed to load MCQs. Please try again later.";
-    if (err.message.includes("Failed to fetch")) {
-      errorMessage = "Unable to connect to the server. Please ensure the backend server is running and try again.";
-    }
-    setError(errorMessage);
-    setTestStarted(false);
-    setShowModePopup(true);
-    console.error("fetchUserMCQsForLawMode error:", err.message);
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   const startTest = (mode, questionCount) => {
     console.log("startTest called with mode:", mode, "questionCount:", questionCount);
-    
-    // Set loading state immediately to prevent UI flicker
     setLoading(true);
     setLoadingMessage("Loading...");
     setError(null);
     setShowModePopup(false);
     setShowModeSelection(false);
-    setShowModeSidebar(false); // Close the sidebar immediately
-
-    // Reset state without setting testStarted to false immediately
+    setShowModeSidebar(false);
     setQuestions([]);
     setUserAnswers([]);
     setQuestionStatuses([]);
@@ -305,10 +260,8 @@ const Laxmikanth = () => {
       percentage: 0,
     });
     setMaxQuestionReached(0);
-
     setIsLawMode(mode === "LAW");
     setQuestionLimit(mode === "WIS" ? questionCount : undefined);
-
     if (mode === "WIS") {
       fetchUserMCQs();
     } else {
@@ -323,7 +276,6 @@ const Laxmikanth = () => {
     let correctCount = 0;
     let wrongCount = 0;
     let unattempted = 0;
-
     for (let i = 0; i < totalQuestions; i++) {
       const status = questionStatuses[i];
       if (status === "correct") {
@@ -336,10 +288,8 @@ const Laxmikanth = () => {
         unattempted++;
       }
     }
-
     const totalScore = correctCount * 1 + wrongCount * -0.33;
     const percentage = totalQuestions > 0 ? (totalScore / totalQuestions) * 100 : 0;
-
     setScoreDetails({
       totalQuestions,
       attempted,
@@ -354,20 +304,15 @@ const Laxmikanth = () => {
   const handleOptionSelect = (option) => {
     const newAnswers = [...userAnswers];
     const newStatuses = [...questionStatuses];
-
     const currentPosition = isLawMode ? (lawModeBatchStart + currentQuestionIndex) : currentQuestionIndex;
     newAnswers[currentPosition] = option;
     newStatuses[currentPosition] = option === questions[currentQuestionIndex].correctAnswer ? "correct" : "wrong";
-
     setUserAnswers(newAnswers);
     setQuestionStatuses(newStatuses);
     setSelectedOption(option);
     setShowExplanation(false);
-
     if (isLawMode) {
       calculateLawScores();
-
-      // Mark the current MCQ as seen immediately after answering
       const seenMcqIds = [questions[currentQuestionIndex].id];
       fetch(`${API_URL}/user/mark-mcqs-seen`, {
         method: "POST",
@@ -375,11 +320,8 @@ const Laxmikanth = () => {
         body: JSON.stringify({ userId, mcqIds: seenMcqIds }),
       })
         .then(res => {
-          if (!res.ok) {
-            console.error("Failed to mark MCQ as seen:", res.status);
-          } else {
-            console.log("MCQ marked as seen for user:", userId);
-          }
+          if (!res.ok) console.error("Failed to mark MCQ as seen:", res.status);
+          else console.log("MCQ marked as seen for user:", userId);
         })
         .catch(err => console.error("Error marking MCQ as seen:", err));
     }
@@ -391,14 +333,11 @@ const Laxmikanth = () => {
 
   const handleNextQuestion = () => {
     if (isLawMode) {
-      // In LAW mode, navigate within the current batch or fetch the next batch
       const maxIndex = questions.length - 1;
       if (currentQuestionIndex >= maxIndex) {
-        // Fetch the next batch of 100 MCQs
         const nextBatchStart = lawModeBatchStart + LAW_MODE_BATCH_SIZE;
         fetchUserMCQsForLawMode(nextBatchStart);
       } else {
-        // Navigate within the current batch
         const nextIndex = currentQuestionIndex + 1;
         setCurrentQuestionIndex(nextIndex);
         const currentPosition = lawModeBatchStart + nextIndex;
@@ -408,27 +347,20 @@ const Laxmikanth = () => {
         calculateLawScores();
       }
     } else {
-      // In WIS mode, navigate through the pre-loaded MCQs
       const maxIndex = Math.min((questionLimit ? questionLimit : questions.length), questions.length) - 1;
-      if (currentQuestionIndex >= maxIndex) {
-        return;
-      }
+      if (currentQuestionIndex >= maxIndex) return;
       const nextIndex = currentQuestionIndex + 1;
       setCurrentQuestionIndex(nextIndex);
       setSelectedOption(userAnswers[nextIndex]);
       setShowExplanation(false);
       setReportMessage(null);
-      if (nextIndex > maxQuestionReached) {
-        setMaxQuestionReached(nextIndex);
-      }
+      if (nextIndex > maxQuestionReached) setMaxQuestionReached(nextIndex);
     }
   };
 
   const handlePreviousQuestion = () => {
     if (isLawMode) {
-      // In LAW mode, navigate within the current batch or fetch the previous batch
       if (currentQuestionIndex > 0) {
-        // Navigate within the current batch
         const prevIndex = currentQuestionIndex - 1;
         setCurrentQuestionIndex(prevIndex);
         const currentPosition = lawModeBatchStart + prevIndex;
@@ -437,12 +369,10 @@ const Laxmikanth = () => {
         setReportMessage(null);
         calculateLawScores();
       } else if (lawModeBatchStart > 0) {
-        // Fetch the previous batch of 100 MCQs
         const prevBatchStart = lawModeBatchStart - LAW_MODE_BATCH_SIZE;
         fetchUserMCQsForLawMode(prevBatchStart);
       }
     } else {
-      // In WIS mode, navigate through the pre-loaded MCQs
       if (currentQuestionIndex > 0) {
         setCurrentQuestionIndex(currentQuestionIndex - 1);
         setSelectedOption(userAnswers[currentQuestionIndex - 1]);
@@ -458,13 +388,11 @@ const Laxmikanth = () => {
       newAnswers[currentQuestionIndex] = selectedOption;
       setUserAnswers(newAnswers);
     }
-
     const totalQuestionsToScore = questionLimit || questions.length;
     let correctCount = 0;
     let wrongCount = 0;
     let attempted = 0;
     const newStatuses = [...questionStatuses];
-
     newAnswers.slice(0, totalQuestionsToScore).forEach((answer, index) => {
       if (answer !== null) {
         attempted++;
@@ -479,20 +407,16 @@ const Laxmikanth = () => {
         if (!isLawMode) newStatuses[index] = "unattempted";
       }
     });
-
     setQuestionStatuses(newStatuses);
-
     const unattempted = totalQuestionsToScore - attempted;
     const totalScore = (correctCount * 1) + (wrongCount * -0.33) + (unattempted * 0);
     const percentage = (totalScore / totalQuestionsToScore) * 100;
-
     setScore(totalScore);
     setCurrentQuestionIndex(0);
     setSelectedOption(newAnswers[0]);
     setShowExplanation(false);
     setReportMessage(null);
     setShowScorePopup(true);
-
     setScoreDetails({
       totalQuestions: totalQuestionsToScore,
       attempted,
@@ -502,7 +426,6 @@ const Laxmikanth = () => {
       totalScore: totalScore.toFixed(2),
       percentage: percentage.toFixed(2),
     });
-
     const seenMcqIds = questions.slice(0, totalQuestionsToScore).map(q => q.id);
     fetch(`${API_URL}/user/mark-mcqs-seen`, {
       method: "POST",
@@ -510,11 +433,8 @@ const Laxmikanth = () => {
       body: JSON.stringify({ userId, mcqIds: seenMcqIds }),
     })
       .then(res => {
-        if (!res.ok) {
-          console.error("Failed to mark MCQs as seen:", res.status);
-        } else {
-          console.log("MCQs marked as seen for user:", userId);
-        }
+        if (!res.ok) console.error("Failed to mark MCQs as seen:", res.status);
+        else console.log("MCQs marked as seen for user:", userId);
       })
       .catch(err => console.error("Error marking MCQs as seen:", err));
   };
@@ -524,7 +444,6 @@ const Laxmikanth = () => {
       setReportMessage("Error: No MCQ to report.");
       return;
     }
-
     const mcqToReport = {
       question: questions[currentQuestionIndex].question,
       options: questions[currentQuestionIndex].options,
@@ -532,7 +451,6 @@ const Laxmikanth = () => {
       explanation: questions[currentQuestionIndex].explanation,
       chapter: questions[currentQuestionIndex].chapter
     };
-
     try {
       const response = await fetch(`${API_URL}/user/report-mcq`, {
         method: "POST",
@@ -543,12 +461,8 @@ const Laxmikanth = () => {
           mcq: mcqToReport
         }),
       });
-
       const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to report MCQ.");
-      }
-
+      if (!response.ok) throw new Error(data.error || "Failed to report MCQ.");
       setReportMessage("MCQ reported successfully!");
       setTimeout(() => setReportMessage(null), 3000);
     } catch (err) {
@@ -559,45 +473,44 @@ const Laxmikanth = () => {
   };
 
   const resetTest = () => {
-  setTestStarted(false); // Add this line to explicitly set testStarted to false
-  setShowModePopup(true);
-  setShowModeSidebar(false);
-  setShowModeSelection(false);
-  setQuestions([]);
-  setUserAnswers([]);
-  setQuestionStatuses([]);
-  setCurrentQuestionIndex(0);
-  setScore(null);
-  setSelectedOption(null);
-  setError(null);
-  setShowExplanation(false);
-  setReportMessage(null);
-  setShowScorePopup(false);
-  setIsUpbarOpen(false);
-  setIsScoreMinimized(false);
-  setFilter("all");
-  setIsWisModeSelected(false);
-  setLawModeBatchStart(0);
-  setScoreDetails({
-    totalQuestions: 0,
-    attempted: 0,
-    correct: 0,
-    wrong: 0,
-    unattempted: 0,
-    totalScore: 0,
-    percentage: 0,
-  });
-  setMaxQuestionReached(0);
-  setLoading(false);
-  console.log("State reset: Test reset");
-};
+    setTestStarted(false);
+    setShowModePopup(true);
+    setShowModeSidebar(false);
+    setShowModeSelection(false);
+    setQuestions([]);
+    setUserAnswers([]);
+    setQuestionStatuses([]);
+    setCurrentQuestionIndex(0);
+    setScore(null);
+    setSelectedOption(null);
+    setError(null);
+    setShowExplanation(false);
+    setReportMessage(null);
+    setShowScorePopup(false);
+    setIsUpbarOpen(false);
+    setIsScoreMinimized(false);
+    setFilter("all");
+    setIsWisModeSelected(false);
+    setLawModeBatchStart(0);
+    setScoreDetails({
+      totalQuestions: 0,
+      attempted: 0,
+      correct: 0,
+      wrong: 0,
+      unattempted: 0,
+      totalScore: 0,
+      percentage: 0,
+    });
+    setMaxQuestionReached(0);
+    setLoading(false);
+    console.log("State reset: Test reset");
+  };
 
   const handleFilterChange = (newFilter) => {
     console.log("handleFilterChange called with newFilter:", newFilter);
     console.log("testStarted:", testStarted);
     console.log("filter before update:", filter);
     console.log("questionStatuses before filtering:", questionStatuses);
-
     let filteredIndices;
     if (isLawMode) {
       filteredIndices = Array.from({ length: lawModeBatchStart + currentQuestionIndex + 1 })
@@ -608,7 +521,6 @@ const Laxmikanth = () => {
         .map((_, i) => i)
         .filter(i => newFilter === "all" || questionStatuses[i] === newFilter);
     }
-
     console.log(`Filtered indices for ${newFilter}:`, filteredIndices);
     setFilter(newFilter);
     console.log("filter after update:", newFilter);
@@ -642,55 +554,30 @@ const Laxmikanth = () => {
   };
 
   const isTableBasedQuestion = (questionLines) => {
-    return (
-      questionLines &&
-      questionLines.some((line) => line.includes("    ")) &&
-      questionLines.some((line) => /^\([A-D]\)/.test(line))
-    );
+    return questionLines && questionLines.some((line) => line.includes("    ")) && questionLines.some((line) => /^\([A-D]\)/.test(line));
   };
 
   const isAssertionReasonQuestion = (questionLines) => {
-    return (
-      questionLines &&
-      questionLines.some((line) => line.startsWith("Assertion (A):")) &&
-      questionLines.some((line) => line.startsWith("Reason (R):"))
-    );
+    return questionLines && questionLines.some((line) => line.startsWith("Assertion (A):")) && questionLines.some((line) => line.startsWith("Reason (R):"));
   };
 
   const isStatementBasedQuestion = (questionLines) => {
-    return (
-      questionLines &&
-      questionLines.some((line) => /^\d+\./.test(line)) &&
-      (questionLines.some((line) => line.includes("Which of the statements given above is/are correct?")) ||
-       questionLines.some((line) => line.includes("How many of the above statements are correct?")))
+    return questionLines && questionLines.some((line) => /^\d+\./.test(line)) && (
+      questionLines.some((line) => line.includes("Which of the statements given above is/are correct?")) ||
+      questionLines.some((line) => line.includes("How many of the above statements are correct?"))
     );
   };
 
   const isChronologicalOrderQuestion = (questionLines) => {
-    return (
-      questionLines &&
-      questionLines.some((line) => line.includes("Arrange the following")) &&
-      questionLines.some((line) => line.includes("chronological order"))
-    );
+    return questionLines && questionLines.some((line) => line.includes("Arrange the following")) && questionLines.some((line) => line.includes("chronological order"));
   };
 
   const isCorrectlyMatchedPairsQuestion = (questionLines) => {
-    return (
-      questionLines &&
-      questionLines.some((line) => line.includes("Consider the following pairs")) &&
-      questionLines.some((line) => line.includes("Which of the pairs are correctly matched?"))
-    );
+    return questionLines && questionLines.some((line) => line.includes("Consider the following pairs")) && questionLines.some((line) => line.includes("Which of the pairs are correctly matched?"));
   };
 
   const isDirectQuestion = (questionLines) => {
-    return (
-      questionLines &&
-      !isStatementBasedQuestion(questionLines) &&
-      !isAssertionReasonQuestion(questionLines) &&
-      !isTableBasedQuestion(questionLines) &&
-      !isChronologicalOrderQuestion(questionLines) &&
-      !isCorrectlyMatchedPairsQuestion(questionLines)
-    );
+    return questionLines && !isStatementBasedQuestion(questionLines) && !isAssertionReasonQuestion(questionLines) && !isTableBasedQuestion(questionLines) && !isChronologicalOrderQuestion(questionLines) && !isCorrectlyMatchedPairsQuestion(questionLines);
   };
 
   const renderQuestion = (questionLines, mcq) => {
@@ -698,17 +585,13 @@ const Laxmikanth = () => {
       console.error("renderQuestion: Invalid questionLines or mcq", { questionLines, mcq });
       return <p className="text-red-200">Error: Question content missing</p>;
     }
-
     console.log("renderQuestion: Processing questionLines:", questionLines);
-
     if (isTableBasedQuestion(questionLines)) {
       const introLine = questionLines[0];
       const columnHeaders = questionLines[1];
       const matchingItems = questionLines.slice(2, questionLines.length - 1);
       const closingLine = questionLines[questionLines.length - 1];
-
       const headers = columnHeaders.split(/\s{4,}/);
-
       return (
         <div>
           <p className="text-base sm:text-lg font-medium text-ivory mb-2">{introLine}</p>
@@ -716,9 +599,7 @@ const Laxmikanth = () => {
             <thead>
               <tr>
                 {headers.map((header, index) => (
-                  <th key={index} className="px-2 sm:px-4 py-1 sm:py-2 border-b border-gray-600">
-                    {header}
-                  </th>
+                  <th key={index} className="px-2 sm:px-4 py-1 sm:py-2 border-b border-gray-600">{header}</th>
                 ))}
               </tr>
             </thead>
@@ -738,7 +619,6 @@ const Laxmikanth = () => {
         </div>
       );
     }
-
     if (isAssertionReasonQuestion(questionLines)) {
       const assertionLine = questionLines.find((line) => line.startsWith("Assertion (A):"));
       const reasonLine = questionLines.find((line) => line.startsWith("Reason (R):"));
@@ -753,7 +633,6 @@ const Laxmikanth = () => {
         </div>
       );
     }
-
     if (isStatementBasedQuestion(questionLines)) {
       return (
         <div className="mb-2">
@@ -761,18 +640,12 @@ const Laxmikanth = () => {
             const isIntro = index === 0;
             const isClosing = line.includes("How many of the above statements are correct?");
             return (
-              <p
-                key={index}
-                className={`mb-1 ${isIntro || isClosing ? "text-cosmic-dark" : "text-ivory"}`}
-              >
-                {line}
-              </p>
+              <p key={index} className={`mb-1 ${isIntro || isClosing ? "text-cosmic-dark" : "text-ivory"}`}>{line}</p>
             );
           })}
         </div>
       );
     }
-
     if (isChronologicalOrderQuestion(questionLines)) {
       const introLine = questionLines[0];
       const closingLineIndex = questionLines.findIndex(line => line.includes("Select the correct order")) !== -1
@@ -780,12 +653,10 @@ const Laxmikanth = () => {
         : questionLines.length;
       const items = questionLines.slice(1, closingLineIndex);
       const closingLine = closingLineIndex < questionLines.length ? questionLines[closingLineIndex] : "Select the correct order:";
-
       if (items.length !== 4) {
         console.error("renderQuestion: Chronological order question does not have exactly 4 items", items);
         return <p className="text-red-200">Error: Incomplete chronological order question</p>;
       }
-
       return (
         <div className="mb-2">
           <p className="mb-1 text-ivory">{introLine}</p>
@@ -796,7 +667,6 @@ const Laxmikanth = () => {
         </div>
       );
     }
-
     if (isCorrectlyMatchedPairsQuestion(questionLines)) {
       const introLine = questionLines[0];
       const closingLineIndex = questionLines.findIndex(line => line.includes("Which of the pairs are correctly matched?"));
@@ -806,12 +676,10 @@ const Laxmikanth = () => {
       }
       const pairs = questionLines.slice(1, closingLineIndex);
       const closingLine = questionLines[closingLineIndex];
-
       if (pairs.length < 3) {
         console.error("renderQuestion: Correctly matched pairs question does not have enough pairs", pairs);
         return <p className="text-red-200">Error: Incomplete correctly matched pairs question</p>;
       }
-
       return (
         <div className="mb-2">
           <p className="mb-1 text-ivory">{introLine}</p>
@@ -822,7 +690,6 @@ const Laxmikanth = () => {
         </div>
       );
     }
-
     if (isDirectQuestion(questionLines)) {
       return (
         <div className="mb-2">
@@ -832,7 +699,6 @@ const Laxmikanth = () => {
         </div>
       );
     }
-
     console.error("renderQuestion: Unknown MCQ structure:", questionLines);
     return (
       <div className="mb-2">
@@ -843,13 +709,11 @@ const Laxmikanth = () => {
     );
   };
 
-  // Calculate lastActiveIndex for WIS mode sidebar coloring
   const lastAttemptedIndex = userAnswers.slice().reverse().findIndex(ans => ans !== null);
   const lastActiveIndex = lastAttemptedIndex === -1 ? -1 : userAnswers.length - 1 - lastAttemptedIndex;
 
-  // Determine if mode/filter changes should be disabled
   const isModeDisabled = () => {
-    return false; // Allow mode changes at any time
+    return false;
   };
 
   const handleGoBack = () => {
@@ -863,17 +727,11 @@ const Laxmikanth = () => {
   };
 
   useEffect(() => {
-    if (isLawMode && testStarted) {
-      calculateLawScores();
-    }
+    if (isLawMode && testStarted) calculateLawScores();
   }, [questionStatuses, maxQuestionReached, isLawMode, testStarted]);
-
-  const [pendingMode, setPendingMode] = useState(isLawMode ? "LAW" : "WIS");
-  const [pendingQuestionLimit, setPendingQuestionLimit] = useState(questionLimit);
 
   return (
     <div className="h-screen bg-gray-900 text-white font-poppins overflow-hidden overscroll-none">
-      {/* Navigation Bar */}
       <nav className="fixed top-0 left-0 w-full bg-[#1F2526]/80 backdrop-blur-md p-3 flex justify-between items-center shadow-lg z-60 h-16">
         <div className="flex items-center gap-0.5 max-w-[40%]">
           <button onClick={handleGoBack} className="text-zinc-300 hover:text-blue-400 transition-colors duration-300">
@@ -881,9 +739,7 @@ const Laxmikanth = () => {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
             </svg>
           </button>
-          <h1 className="text-lg sm:text-xl md:text-3xl font-extrabold tracking-tight text-blue-400">
-            TrainWithMe
-          </h1>
+          <h1 className="text-lg sm:text-xl md:text-3xl font-extrabold tracking-tight text-blue-400">TrainWithMe</h1>
         </div>
         <div className="flex items-center justify-center flex-1">
           {testStarted && (
@@ -919,89 +775,110 @@ const Laxmikanth = () => {
         </div>
       </nav>
 
-      {/* Report Message Display */}
       {reportMessage && (
         <div className="fixed top-16 left-0 right-0 z-40 p-4 bg-gray-800 border border-gray-700 rounded-lg mx-auto max-w-2xl">
-          <p className={`text-base sm:text-lg ${reportMessage.includes("successfully") ? "text-green-200" : "text-red-200"}`}>
-            {reportMessage}
-          </p>
+          <p className={`text-base sm:text-lg ${reportMessage.includes("successfully") ? "text-green-200" : "text-red-200"}`}>{reportMessage}</p>
         </div>
       )}
 
-      {/* Initial Mode Selection Popup */}
       {showModePopup && (
-        <div className="fixed top-16 left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-gray-800 p-6 rounded-lg shadow-2xl max-w-md w-full">
-            <h2 className="text-2xl sm:text-3xl font-bold text-blue-400 mb-6 drop-shadow-lg">Choose Your Mode</h2>
-            <div className="flex flex-col gap-3 mb-6">
+  <div className="fixed top-16 left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-gradient-to-br from-gray-900/80 to-blue-900/80 overflow-hidden">
+    {/* Animated Background Effect */}
+    <div className="absolute inset-0 z-0 animate-cosmic-bg">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(59,130,246,0.1)_0%,transparent_70%)]"></div>
+      <div className="absolute w-1 h-1 bg-blue-300 rounded-full animate-twinkle top-1/4 left-1/3"></div>
+      <div className="absolute w-1 h-1 bg-blue-200 rounded-full animate-twinkle top-2/3 left-3/4 delay-500"></div>
+      <div className="absolute w-1 h-1 bg-blue-400 rounded-full animate-twinkle top-1/2 left-1/5 delay-1000"></div>
+    </div>
+
+    {/* Popup Content */}
+    <div className="relative bg-gradient-to-br from-gray-900 to-blue-950 p-8 rounded-2xl shadow-2xl max-w-md w-full border border-blue-500/30 backdrop-blur-lg animate-fade-in-scale z-10">
+      {/* Background Glow Effect */}
+      <div className="absolute inset-0 bg-blue-500/10 rounded-2xl -z-10 animate-pulse"></div>
+      
+      {/* Title with Gradient Text and Underline Animation */}
+      <h2 className="text-3xl sm:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500 mb-8 relative">
+        Choose Your Mode
+        <span className="absolute left-0 bottom-0 w-0 h-1 bg-gradient-to-r from-blue-400 to-purple-500 transition-all duration-500 group-hover:w-full"></span>
+      </h2>
+
+      {/* Mode Selection Buttons */}
+      <div className="flex flex-col gap-4 mb-8">
+        <button
+          onClick={() => {
+            setPendingMode("LAW");
+            setIsWisModeSelected(false);
+          }}
+          className={`group flex items-center gap-3 px-4 py-3 rounded-xl text-lg sm:text-xl font-semibold transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-purple-500/20 border-2 ${
+            pendingMode === "LAW"
+              ? "bg-purple-600/80 border-purple-400 text-white"
+              : "bg-gray-700/50 border-gray-500 text-gray-200"
+          } backdrop-blur-sm`}
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          LAW (Learn Along the Way)
+        </button>
+        <button
+          onClick={() => {
+            setPendingMode("WIS");
+            setIsWisModeSelected(true);
+          }}
+          className={`group flex items-center gap-3 px-4 py-3 rounded-xl text-lg sm:text-xl font-semibold transition-all duration-300 transform hover:scale-105 hover:shadow-lg hover:shadow-emerald-500/20 border-2 ${
+            pendingMode === "WIS"
+              ? "bg-emerald-600/80 border-emerald-400 text-white"
+              : "bg-gray-700/50 border-gray-500 text-gray-200"
+          } backdrop-blur-sm`}
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+          </svg>
+          WIS (Where I Stand)
+        </button>
+      </div>
+
+      {/* WIS Question Count Selection */}
+      {pendingMode === "WIS" && (
+        <>
+          <h3 className="text-lg sm:text-xl font-semibold text-blue-300 mb-3">Number of Questions</h3>
+          <div className="grid grid-cols-3 gap-3 mb-6">
+            {[25, 50, 100].map(num => (
               <button
+                key={num}
                 onClick={() => {
-                  setPendingMode("LAW");
-                  setIsWisModeSelected(false);
+                  setPendingQuestionLimit(num);
+                  if (pendingMode === "WIS") setQuestionLimit(num);
                 }}
-                className={`px-3 py-2 rounded-lg text-base sm:text-lg font-semibold transition-all duration-300 transform hover:scale-105 ${
-                  pendingMode === "LAW" ? "bg-purple-600 text-gray-50 shadow-lg" : "bg-gray-600 text-gray-300"
-                }`}
+                className={`px-4 py-2 rounded-lg text-lg font-semibold transition-all duration-300 transform hover:scale-105 border-2 ${
+                  pendingQuestionLimit === num
+                    ? "bg-blue-600 border-blue-400 text-white shadow-md shadow-blue-500/30"
+                    : "bg-gray-700/50 border-gray-500 text-gray-200 hover:shadow-md hover:shadow-blue-500/20"
+                } backdrop-blur-sm`}
               >
-                LAW (Learn Along the Way)
+                {num}
               </button>
-              <button
-                onClick={() => {
-                  setPendingMode("WIS");
-                  setIsWisModeSelected(true);
-                }}
-                className={`px-3 py-2 rounded-lg text-base sm:text-lg font-semibold transition-all duration-300 transform hover:scale-105 ${
-                  pendingMode === "WIS" ? "bg-emerald-500 text-gray-50 shadow-lg" : "bg-gray-600 text-gray-300"
-                }`}
-              >
-                WIS (Where I Stand)
-              </button>
-            </div>
-            {/* Number of Questions (Only in WIS Mode) */}
-            {pendingMode === "WIS" && (
-              <>
-                <h3 className="text-base sm:text-lg font-semibold text-white mb-2">Number of Questions</h3>
-                <div className="flex flex-col gap-2 mb-4">
-                  {[25, 50, 100].map(num => (
-                    <button
-                      key={num}
-                      onClick={() => {
-                        setPendingQuestionLimit(num);
-                        if (pendingMode === "WIS") {
-                          setQuestionLimit(num);
-                        }
-                      }}
-                      className={`px-3 py-2 rounded-lg text-base sm:text-lg font-semibold transition-all duration-300 transform hover:scale-105 ${
-                        pendingQuestionLimit === num ? "bg-blue-600 text-gray-50 shadow-lg" : "bg-gray-600 text-gray-300"
-                      }`}
-                    >
-                      {num}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-            <button
-              onClick={() => startTest(pendingMode, pendingQuestionLimit)}
-              className="w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white px-4 py-2 rounded-lg shadow-xl hover:from-blue-700 hover:via-indigo-700 hover:to-purple-700 transition-all duration-500 transform hover:scale-105 text-base sm:text-lg font-bold"
-            >
-              Start Test
-            </button>
+            ))}
           </div>
-        </div>
+        </>
       )}
 
-      {/* Horizontal Strip for Filtered Questions */}
+      {/* Start Test Button */}
+      <button
+        onClick={() => startTest(pendingMode, pendingQuestionLimit)}
+        className="w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white px-4 py-3 rounded-xl shadow-xl hover:from-blue-700 hover:via-indigo-700 hover:to-purple-700 transition-all duration-500 transform hover:scale-105 text-lg sm:text-xl font-bold border border-blue-400/50 hover:shadow-lg hover:shadow-blue-500/30"
+      >
+        Start Test
+      </button>
+    </div>
+  </div>
+)}
+
       {console.log("Horizontal strip rendering check - testStarted:", testStarted, "filter:", filter)}
       {testStarted && filter !== "all" && (
         <div
           className="fixed top-[4rem] left-0 w-full bg-gray-800 z-40 p-2 overflow-x-auto overflow-y-hidden flex space-x-2 items-center border-2 border-red-500"
-          style={{ 
-            height: '3rem',
-            opacity: 1, 
-            visibility: 'visible', 
-            position: 'fixed' 
-          }}
+          style={{ height: '3rem', opacity: 1, visibility: 'visible', position: 'fixed' }}
         >
           {(() => {
             let filteredIndices;
@@ -1010,19 +887,12 @@ const Laxmikanth = () => {
                 .map((_, i) => i)
                 .filter(i => filter === "all" || questionStatuses[i] === filter);
             } else {
-              filteredIndices = Array.from({
-                length: questionLimit || questions.length
-              })
+              filteredIndices = Array.from({ length: questionLimit || questions.length })
                 .map((_, i) => i)
                 .filter(i => filter === "all" || questionStatuses[i] === filter);
             }
-
             if (filteredIndices.length === 0) {
-              return (
-                <p className="text-white text-xs sm:text-sm">
-                  No {filter} questions found.
-                </p>
-              );
+              return <p className="text-white text-xs sm:text-sm">No {filter} questions found.</p>;
             }
             return filteredIndices.map((actualIndex) => {
               const status = questionStatuses[actualIndex] || "unattempted";
@@ -1070,15 +940,12 @@ const Laxmikanth = () => {
         </div>
       )}
 
-      {/* Main Content */}
       <div className="pt-16 pb-10 px-4 sm:px-6 lg:px-8 w-full overflow-hidden">
         {loading ? (
           <div className="h-[calc(100vh-4rem)] w-full flex items-center justify-center">
             <div className="flex items-center">
               <span className="inline-block w-12 h-12 border-4 border-blue-400 border-t-transparent rounded-full animate-spin"></span>
-              <span className="ml-4 text-lg sm:text-xl font-bold text-blue-300 tracking-wide">
-                {loadingMessage || "Loading..."}
-              </span>
+              <span className="ml-4 text-lg sm:text-xl font-bold text-blue-300 tracking-wide">{loadingMessage || "Loading..."}</span>
             </div>
           </div>
         ) : !testStarted && !loading ? (
@@ -1092,9 +959,7 @@ const Laxmikanth = () => {
                 <div className="flex items-center justify-center mb-4">
                   <span className="inline-block w-12 h-12 border-4 border-blue-400 border-t-transparent rounded-full animate-spin"></span>
                 </div>
-                <p className="text-lg sm:text-xl font-bold text-blue-300 tracking-wide">
-                  {loadingMessage || "Loading..."}
-                </p>
+                <p className="text-lg sm:text-xl font-bold text-blue-300 tracking-wide">{loadingMessage || "Loading..."}</p>
               </div>
             ) : error ? (
               <div className="p-4 bg-red-950 border border-red-700 rounded-lg mx-auto max-w-2xl">
@@ -1108,21 +973,16 @@ const Laxmikanth = () => {
               </div>
             ) : questions.length > 0 && questions[currentQuestionIndex] ? (
               <>
-                <div 
+                <div
                   className="fixed left-0 w-full z-60 px-3 sm:px-4 lg:px-6 question-box bg-gray-900"
-                  style={{
-                    top: '4rem',
-                    height: 'calc((100dvh - 8rem) * 0.5)',
-                  }}
+                  style={{ top: '4rem', height: 'calc((100dvh - 8rem) * 0.5)' }}
                   onClick={() => ((isLawMode && selectedOption) || (!isLawMode && score !== null)) && setShowExplanation(!showExplanation)}
                 >
                   <p className="text-sm sm:text-base text-white mb-1 question-number">
                     Question {isLawMode ? (lawModeBatchStart + currentQuestionIndex + 1) : (currentQuestionIndex + 1)}
                   </p>
                   {questions[currentQuestionIndex].chapter && (
-                    <p className="text-xs sm:text-sm text-white/80 mb-1 chapter-text">
-                      Chapter: {questions[currentQuestionIndex].chapter}
-                    </p>
+                    <p className="text-xs sm:text-sm text-white/80 mb-1 chapter-text">Chapter: {questions[currentQuestionIndex].chapter}</p>
                   )}
                   <div className="h-full font-medium text-white bg-gradient-to-br from-gray-800 to-blue-900 p-2 rounded-lg shadow-inner">
                     <div className="question-content leading-tight" style={{ fontSize: `${fontSize}px` }}>
@@ -1130,27 +990,19 @@ const Laxmikanth = () => {
                     </div>
                   </div>
                 </div>
-
-                <div 
+                <div
                   className="absolute left-0 w-full bg-gray-900 z-20 px-2 sm:px-8 lg:px-6"
-                  style={{ 
-                    top: 'calc(4rem + (100dvh - 8rem) * 0.5)',
-                    bottom: '4rem',
-                  }}
+                  style={{ top: 'calc(4rem + (100dvh - 8rem) * 0.5)', bottom: '4rem' }}
                 >
                   <div className="bg-gray-800 rounded-lg p-2 sm:p-2 h-full overflow-y-auto">
                     <div className="flex flex-col gap-0.5">
                       {Object.entries(questions[currentQuestionIndex].options).map(([key, option]) => {
                         const isUserAnswer = userAnswers[isLawMode ? (lawModeBatchStart + currentQuestionIndex) : currentQuestionIndex] === key;
                         const isCorrectAnswer = questions[currentQuestionIndex].correctAnswer === key;
-
                         let baseClassName = `
                           w-full text-left p-5 sm:p-5 rounded-md border transition-colors duration-300 
-                          text-sm sm:text-lg
-                          flex items-center justify-start
-                          min-h-[2.5rem] sm:min-h-[3rem]
-                          overflow-y-auto
-                          focus:outline-none focus:ring-2 focus:ring-orange-400
+                          text-sm sm:text-lg flex items-center justify-start min-h-[2.5rem] sm:min-h-[3rem]
+                          overflow-y-auto focus:outline-none focus:ring-2 focus:ring-orange-400
                         `;
                         let stateClassName = "";
                         if ((isLawMode && selectedOption) || (!isLawMode && score !== null)) {
@@ -1166,7 +1018,6 @@ const Laxmikanth = () => {
                             ? "bg-orange-600 border-orange-400 text-white"
                             : "bg-gray-700 border-gray-600 text-zinc-300 hover:bg-gray-600 hover:border-gray-500";
                         }
-
                         return (
                           <button
                             key={key}
@@ -1189,65 +1040,18 @@ const Laxmikanth = () => {
                   {((isLawMode && selectedOption) || (!isLawMode && score !== null)) && showExplanation && (
                     <div
                       className="absolute top-0 left-0 right-0 bottom-0 rounded-lg z-70 pointer-events-auto"
-                      onClick={() => setShowExplanation(false)} // Clicking the overlay hides the explanation
+                      onClick={() => setShowExplanation(false)}
                     >
                       <div className="absolute top-0 left-0 right-0 bg-black/80 p-2 sm:p-3 rounded-lg flex flex-col h-full">
                         <p className="text-base sm:text-lg font-medium text-zinc-200 mb-2">Explanation:</p>
                         <div className="flex-1 overflow-y-auto">
-                          <p className="text-[16px] sm:text-xl text-zinc-200 leading-relaxed">
-                            {questions[currentQuestionIndex].explanation}
-                          </p>
+                          <p className="text-[16px] sm:text-xl text-zinc-200 leading-relaxed">{questions[currentQuestionIndex].explanation}</p>
                         </div>
                       </div>
                     </div>
                   )}
                 </div>
-
-                {/* LAW Mode Upbar Panel */}
-                {isUpbarOpen && isLawMode && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-                    <div className="bg-gray-800 p-6 rounded-lg shadow-2xl max-w-md w-full relative">
-                      <button
-                        onClick={() => setIsUpbarOpen(false)}
-                        className="absolute top-2 right-2 text-gray-400 hover:text-white text-xl font-bold"
-                        aria-label="Close"
-                      >
-                        ×
-                      </button>
-                      <h2 className="text-xl sm:text-2xl font-bold text-blue-400 mb-4">Score</h2>
-                      <div className="text-white space-y-2">
-                        <p>Total Questions: {scoreDetails.totalQuestions}</p>
-                        <p>Number of Questions Attempted: {scoreDetails.attempted}</p>
-                        <p>Number of Correct Answers: {scoreDetails.correct}</p>
-                        <p>Number of Wrong Answers: {scoreDetails.wrong}</p>
-                        <p>Number of Unattempted Questions: {scoreDetails.unattempted}</p>
-                        <p>Total Score: {scoreDetails.totalScore}</p>
-                        <p className="flex items-center">
-                          Percentage: {scoreDetails.percentage}%
-                          {scoreDetails.percentage >= 50 ? (
-                            <span className="ml-2 flex items-center text-green-400">
-                              <svg className="w-5 h-5 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                              </svg>
-                              Above prelims cutoff percentage
-                            </span>
-                          ) : (
-                            <span className="ml-2 flex items-center text-red-400">
-                              <svg className="w-5 h-5 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm-3.707-9.293a1 1 0 011.414-1.414L11 10.586l1.293-1.293a1 1 0 111.414 1.414l-2 2a1 1 0 01-1.414 0l-4-4z" clipRule="evenodd" />
-                              </svg>
-                              Below prelims cutoff percentage
-                            </span>
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div 
-                  className="fixed bottom-0 left-0 w-full bg-[#1F2526]/80 backdrop-blur-md p-4 flex justify-between items-center shadow-lg z-50"
-                >
+                <div className="fixed bottom-0 left-0 w-full bg-[#1F2526]/80 backdrop-blur-md p-4 flex justify-between items-center shadow-lg z-50">
                   <button
                     onClick={handlePreviousQuestion}
                     disabled={currentQuestionIndex === 0 && (isLawMode ? lawModeBatchStart === 0 : true)}
@@ -1288,12 +1092,10 @@ const Laxmikanth = () => {
                   ) : (
                     <button
                       onClick={handleNextQuestion}
-                      disabled={
-                        !isLawMode && (
-                          currentQuestionIndex >= Math.min(questionLimit ? questionLimit - 1 : questions.length - 1, questions.length - 1) ||
-                          (currentQuestionIndex === questions.length - 1 && score !== null)
-                        )
-                      }
+                      disabled={!isLawMode && (
+                        currentQuestionIndex >= Math.min(questionLimit ? questionLimit - 1 : questions.length - 1, questions.length - 1) ||
+                        (currentQuestionIndex === questions.length - 1 && score !== null)
+                      )}
                       className={`px-4 py-2 sm:px-6 sm:py-3 text-sm sm:text-base rounded-full shadow-lg transition-transform transform hover:scale-105 duration-300 ${
                         !isLawMode && (
                           currentQuestionIndex >= Math.min(questionLimit ? questionLimit - 1 : questions.length - 1, questions.length - 1) ||
@@ -1310,9 +1112,7 @@ const Laxmikanth = () => {
               </>
             ) : testStarted && questions.length > 0 ? (
               <div className="p-4 bg-red-950 border border-red-700 rounded-lg mx-auto max-w-2xl">
-                <p className="text-base sm:text-lg text-red-200">
-                  Error: Invalid question index. Please reset the test.
-                </p>
+                <p className="text-base sm:text-lg text-red-200">Error: Invalid question index. Please reset the test.</p>
                 <button
                   onClick={resetTest}
                   className="mt-4 bg-purple-600 text-gray-50 px-4 py-2 rounded-full shadow-lg hover:bg-purple-700 transition-transform transform hover:scale-105 duration-300"
@@ -1325,7 +1125,6 @@ const Laxmikanth = () => {
         )}
       </div>
 
-      {/* Score Popup in WIS Mode */}
       {showScorePopup && !isLawMode && (
         <div className="fixed top-16 left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-gray-800 p-6 rounded-lg shadow-lg max-w-md w-full">
@@ -1370,14 +1169,12 @@ const Laxmikanth = () => {
         </div>
       )}
 
-      {/* Mode Selection Sidebar with Question Circles */}
       <div
         className="fixed top-16 right-0 h-[calc(100vh-4rem)] w-64 bg-gray-800 shadow-2xl z-[9999] transition-all duration-300 ease-in-out"
         style={{ right: showModeSidebar ? "0" : "-256px" }}
         onTransitionEnd={() => console.log("Sidebar transition ended, showModeSidebar:", showModeSidebar)}
       >
         <div className="p-4 h-full flex flex-col relative">
-          {/* Score Button */}
           {isScoreMinimized && isLawMode && (
             <button
               onClick={() => {
@@ -1389,15 +1186,12 @@ const Laxmikanth = () => {
               Score
             </button>
           )}
-          {/* Top Bar for Mode & Questions Section */}
           <div
             onClick={() => setShowModeSelection(!showModeSelection)}
             className="bg-gray-700 rounded-lg p-3 mb-4 cursor-pointer hover:bg-gray-600 transition-colors duration-300"
           >
             <div className="flex justify-between items-center">
-              <h2 className="text-lg sm:text-xl font-semibold text-blue-400">
-                Mode & Questions
-              </h2>
+              <h2 className="text-lg sm:text-xl font-semibold text-blue-400">Mode & Questions</h2>
               <svg
                 className={`w-5 h-5 transform ${showModeSelection ? "rotate-180" : ""}`}
                 fill="none"
@@ -1409,8 +1203,6 @@ const Laxmikanth = () => {
               </svg>
             </div>
           </div>
-
-          {/* Mode & Questions Section (Collapsible) */}
           {showModeSelection && (
             <div className="mb-4">
               <div className="flex flex-col gap-2 mb-4">
@@ -1437,7 +1229,6 @@ const Laxmikanth = () => {
                   WIS (Where I Stand)
                 </button>
               </div>
-              {/* Number of Questions (Only in WIS Mode) */}
               {pendingMode === "WIS" && (
                 <>
                   <h3 className="text-base sm:text-lg font-semibold text-white mb-2">Number of Questions</h3>
@@ -1447,9 +1238,7 @@ const Laxmikanth = () => {
                         key={num}
                         onClick={() => {
                           setPendingQuestionLimit(num);
-                          if (pendingMode === "WIS") {
-                            setQuestionLimit(num);
-                          }
+                          if (pendingMode === "WIS") setQuestionLimit(num);
                         }}
                         className={`px-3 py-2 rounded-lg text-base sm:text-lg font-semibold transition-all duration-300 transform hover:scale-105 ${
                           pendingQuestionLimit === num ? "bg-blue-600 text-gray-50 shadow-lg" : "bg-gray-600 text-gray-300"
@@ -1469,13 +1258,9 @@ const Laxmikanth = () => {
               </button>
             </div>
           )}
-
-          {/* Filter Dropdown */}
           {testStarted && (
             <div className="mb-4 z-10">
-              <label className="block text-xs sm:text-sm font-semibold text-blue-300 mb-1" htmlFor="sidebar-filter-select">
-                Filter
-              </label>
+              <label className="block text-xs sm:text-sm font-semibold text-blue-300 mb-1" htmlFor="sidebar-filter-select">Filter</label>
               <select
                 id="sidebar-filter-select"
                 value={filter}
@@ -1483,9 +1268,7 @@ const Laxmikanth = () => {
                   console.log("Filter dropdown changed, new value:", e.target.value);
                   handleFilterChange(e.target.value);
                 }}
-                className={`w-full bg-gray-700 text-white px-3 py-2 rounded-lg text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-blue-400 ${
-                  isModeDisabled() ? "opacity-50 cursor-not-allowed" : ""
-                }`}
+                className={`w-full bg-gray-700 text-white px-3 py-2 rounded-lg text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-blue-400 ${isModeDisabled() ? "opacity-50 cursor-not-allowed" : ""}`}
                 disabled={isModeDisabled()}
               >
                 <option value="all">All Questions</option>
@@ -1495,13 +1278,9 @@ const Laxmikanth = () => {
               </select>
             </div>
           )}
-
-          {/* Question Circles and Submit Test Button */}
           {testStarted && (
             <div className="flex-1 overflow-y-auto">
-              <h3 className={`text-base sm:text-lg font-semibold text-white mb-2 p-2 rounded-lg ${filter === "wrong" ? "bg-red-500" : "bg-gray-700"}`}>
-                Question Progress
-              </h3>
+              <h3 className={`text-base sm:text-lg font-semibold text-white mb-2 p-2 rounded-lg ${filter === "wrong" ? "bg-red-500" : "bg-gray-700"}`}>Question Progress</h3>
               <div className="grid grid-cols-5 gap-2">
                 {(() => {
                   let circleCount;
@@ -1514,41 +1293,22 @@ const Laxmikanth = () => {
                       ? (testStarted ? Math.min(maxQuestionReached + 1, questions.length) : 1)
                       : Math.min(effectiveQuestionLimit || questions.length, questions.length);
                   }
-
                   const filteredIndices = Array.from({ length: circleCount })
                     .map((_, i) => i)
                     .filter(i => filter === "all" || questionStatuses[i] === filter);
-
                   return filteredIndices.map((actualIndex) => {
                     const status = questionStatuses[actualIndex] || "unattempted";
                     const isCurrent = actualIndex === (isLawMode ? (lawModeBatchStart + currentQuestionIndex) : currentQuestionIndex) && !showExplanation;
-
                     let colorClass = "";
                     if (isLawMode) {
-                      colorClass =
-                        status === "correct"
-                          ? "bg-green-500"
-                          : status === "wrong"
-                          ? "bg-red-500"
-                          : isCurrent
-                          ? "bg-purple-500"
-                          : "bg-white";
+                      colorClass = status === "correct" ? "bg-green-500" : status === "wrong" ? "bg-red-500" : isCurrent ? "bg-purple-500" : "bg-white";
                     } else if (score !== null) {
-                      colorClass =
-                        status === "correct"
-                          ? "bg-green-500"
-                          : status === "wrong"
-                          ? "bg-red-500"
-                          : "bg-white";
+                      colorClass = status === "correct" ? "bg-green-500" : status === "wrong" ? "bg-red-500" : "bg-white";
                     } else {
-                      colorClass =
-                        actualIndex <= maxQuestionReached
-                          ? userAnswers[actualIndex] !== null
-                            ? "bg-blue-500"
-                            : "bg-white"
-                          : "bg-gray-500";
+                      colorClass = actualIndex <= maxQuestionReached
+                        ? userAnswers[actualIndex] !== null ? "bg-blue-500" : "bg-white"
+                        : "bg-gray-500";
                     }
-
                     return (
                       <div
                         key={actualIndex}
@@ -1583,7 +1343,6 @@ const Laxmikanth = () => {
                   });
                 })()}
               </div>
-              {/* Submit Test Button for WIS Mode */}
               {!isLawMode && score === null && (
                 <button
                   onClick={submitTest}

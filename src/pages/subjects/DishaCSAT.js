@@ -107,7 +107,7 @@ const DishaCSAT = () => {
     }
   }, [questions, currentQuestionIndex]);
 
-  const API_URL = "https://trainwithme-backend.onrender.com";
+  const API_URL = "https://trainwithme-backend-git-main-yogesh-yadavs-projects-b7fc36f0.vercel.app";
   const LAW_MODE_BATCH_SIZE = 100;
 
   const fetchUserMCQs = async () => {

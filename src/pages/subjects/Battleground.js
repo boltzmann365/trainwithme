@@ -40,7 +40,7 @@ const Battleground = () => {
     percentage: 0,
   });
 
-  const API_URL = process.env.REACT_APP_API_URL || "https://trainwithme-backend.onrender.com";
+  const API_URL = process.env.REACT_APP_API_URL || "http://localhost:3001";
   const DESIRED_QUESTIONS = 100; // Desired number of questions
   const PRELIMS_CUTOFF = 50;
 
@@ -116,80 +116,180 @@ const Battleground = () => {
       const questionsPerSubject = Math.floor(DESIRED_QUESTIONS / subjects.length);
       const extraQuestions = DESIRED_QUESTIONS % subjects.length;
 
+      // Track subjects that successfully provided MCQs and unfilled quotas
+      const subjectResults = [];
+      let totalUnfilledQuota = 0;
+
+      // Initial fetch for each subject
       for (let i = 0; i < subjects.length && remainingQuestions > 0; i++) {
         const subject = subjects[i];
         const baseCount = questionsPerSubject + (i < extraQuestions ? 1 : 0);
         let requestedCount = baseCount;
         let subjectMCQs = [];
 
-        // Keep fetching until we get enough valid MCQs for this subject
-        while (subjectMCQs.length < baseCount && requestedCount <= 50) { // Cap to avoid infinite loops
-          console.log(`Battleground: fetchUserMCQs - Fetching ${requestedCount} MCQs for subject: ${subject}`);
+        try {
+          while (subjectMCQs.length < baseCount && requestedCount <= 50) { // Cap to avoid infinite loops
+            console.log(`Battleground: fetchUserMCQs - Fetching ${requestedCount} MCQs for subject: ${subject}`);
 
-          const response = await fetch(`${API_URL}/user/get-book-mcqs`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId, book: subject, requestedCount }),
-          });
+            const response = await fetch(`${API_URL}/user/get-book-mcqs`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ userId, book: subject, requestedCount }),
+            });
 
-          if (!response.ok) {
-            const errorData = await response.json();
-            console.error(`Battleground: fetchUserMCQs - Failed to fetch MCQs for ${subject}:`, errorData);
-            throw new Error(errorData.error || `No new MCQs available for ${subject}.`);
+            if (!response.ok) {
+              const errorData = await response.json();
+              console.warn(`Battleground: fetchUserMCQs - Failed to fetch MCQs for ${subject}:`, errorData);
+              break; // Skip this subject and continue with the next
+            }
+
+            const data = await response.json();
+            console.log(`Battleground: fetchUserMCQs - Received ${data.mcqs?.length || 0} MCQs for ${subject}:`, data.mcqs);
+            if (!data.mcqs || data.mcqs.length === 0) {
+              console.warn(`Battleground: fetchUserMCQs - No new MCQs available for ${subject}`);
+              break;
+            }
+
+            const transformedMCQs = data.mcqs
+              .filter(mcq => {
+                if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
+                  console.warn(`Battleground: fetchUserMCQs - Invalid MCQ found in ${subject} and skipped:`, mcq);
+                  return false;
+                }
+                return true;
+              })
+              .map(mcq => ({
+                question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
+                options: mcq.mcq.options,
+                correctAnswer: mcq.mcq.correctAnswer,
+                explanation: mcq.mcq.explanation,
+                category: subject,
+                id: mcq._id
+              }));
+
+            console.log(`Battleground: fetchUserMCQs - Transformed ${transformedMCQs.length} valid MCQs for ${subject} (out of ${data.mcqs.length} fetched)`);
+            subjectMCQs.push(...transformedMCQs);
+
+            if (subjectMCQs.length < baseCount) {
+              requestedCount += 5; // Fetch 5 more MCQs
+              console.log(`Battleground: fetchUserMCQs - Need ${baseCount - subjectMCQs.length} more valid MCQs for ${subject}, increasing request to ${requestedCount}`);
+            }
           }
 
-          const data = await response.json();
-          console.log(`Battleground: fetchUserMCQs - Received ${data.mcqs?.length || 0} MCQs for ${subject}:`, data.mcqs);
-          if (!data.mcqs || data.mcqs.length === 0) {
-            throw new Error(`No new MCQs available for ${subject}.`);
+          const fetchedCount = Math.min(baseCount, subjectMCQs.length);
+          if (fetchedCount < baseCount) {
+            const unfilled = baseCount - fetchedCount;
+            console.warn(`Battleground: fetchUserMCQs - Could only fetch ${fetchedCount} valid MCQs for ${subject} (needed ${baseCount}), unfilled quota: ${unfilled}`);
+            totalUnfilledQuota += unfilled;
           }
 
-          const transformedMCQs = data.mcqs
-            .filter(mcq => {
-              if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
-                console.warn(`Battleground: fetchUserMCQs - Invalid MCQ found in ${subject} and skipped:`, mcq);
-                return false;
+          allMCQs.push(...subjectMCQs.slice(0, baseCount));
+          remainingQuestions -= fetchedCount;
+
+          // Track the subject and how many MCQs it provided
+          subjectResults.push({ subject, fetchedCount, mcqs: subjectMCQs.slice(0, baseCount) });
+        } catch (err) {
+          console.warn(`Battleground: fetchUserMCQs - Skipping subject ${subject} due to error:`, err.message);
+          totalUnfilledQuota += baseCount;
+          remainingQuestions -= baseCount;
+          subjectResults.push({ subject, fetchedCount: 0, mcqs: [] });
+        }
+      }
+
+      console.log(`Battleground: fetchUserMCQs - Initial fetch completed. Total MCQs: ${allMCQs.length}, Unfilled quota: ${totalUnfilledQuota}`);
+
+      // Redistribute unfilled quota to subjects that provided MCQs
+      if (totalUnfilledQuota > 0) {
+        const successfulSubjects = subjectResults.filter(result => result.fetchedCount > 0).map(result => result.subject);
+        console.log(`Battleground: fetchUserMCQs - Successful subjects for redistribution:`, successfulSubjects);
+
+        if (successfulSubjects.length > 0) {
+          const extraPerSubject = Math.floor(totalUnfilledQuota / successfulSubjects.length);
+          const extraRemainder = totalUnfilledQuota % successfulSubjects.length;
+
+          for (let i = 0; i < successfulSubjects.length; i++) {
+            const subject = successfulSubjects[i];
+            const additionalCount = extraPerSubject + (i < extraRemainder ? 1 : 0);
+            if (additionalCount <= 0) continue;
+
+            try {
+              let requestedCount = additionalCount;
+              let additionalMCQs = [];
+              console.log(`Battleground: fetchUserMCQs - Redistributing: Fetching ${requestedCount} additional MCQs for ${subject}`);
+
+              while (additionalMCQs.length < additionalCount && requestedCount <= 50) {
+                const response = await fetch(`${API_URL}/user/get-book-mcqs`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ userId, book: subject, requestedCount }),
+                });
+
+                if (!response.ok) {
+                  const errorData = await response.json();
+                  console.warn(`Battleground: fetchUserMCQs - Failed to fetch additional MCQs for ${subject}:`, errorData);
+                  break;
+                }
+
+                const data = await response.json();
+                console.log(`Battleground: fetchUserMCQs - Received ${data.mcqs?.length || 0} additional MCQs for ${subject}:`, data.mcqs);
+                if (!data.mcqs || data.mcqs.length === 0) {
+                  console.warn(`Battleground: fetchUserMCQs - No more MCQs available for ${subject}`);
+                  break;
+                }
+
+                const transformedMCQs = data.mcqs
+                  .filter(mcq => {
+                    // Avoid duplicates by checking if the MCQ ID is already in allMCQs
+                    if (allMCQs.some(existing => existing.id === mcq._id)) {
+                      return false;
+                    }
+                    if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
+                      console.warn(`Battleground: fetchUserMCQs - Invalid additional MCQ found in ${subject} and skipped:`, mcq);
+                      return false;
+                    }
+                    return true;
+                  })
+                  .map(mcq => ({
+                    question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
+                    options: mcq.mcq.options,
+                    correctAnswer: mcq.mcq.correctAnswer,
+                    explanation: mcq.mcq.explanation,
+                    category: subject,
+                    id: mcq._id
+                  }));
+
+                console.log(`Battleground: fetchUserMCQs - Transformed ${transformedMCQs.length} additional valid MCQs for ${subject}`);
+                additionalMCQs.push(...transformedMCQs);
+
+                if (additionalMCQs.length < additionalCount) {
+                  requestedCount += 5;
+                  console.log(`Battleground: fetchUserMCQs - Need ${additionalCount - additionalMCQs.length} more valid MCQs for ${subject}, increasing request to ${requestedCount}`);
+                }
               }
-              return true;
-            })
-            .map(mcq => ({
-              question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
-              options: mcq.mcq.options,
-              correctAnswer: mcq.mcq.correctAnswer,
-              explanation: mcq.mcq.explanation,
-              category: subject,
-              id: mcq._id
-            }));
 
-          console.log(`Battleground: fetchUserMCQs - Transformed ${transformedMCQs.length} valid MCQs for ${subject} (out of ${data.mcqs.length} fetched)`);
-          subjectMCQs.push(...transformedMCQs);
-
-          // If we didn't get enough valid MCQs, request more
-          if (subjectMCQs.length < baseCount) {
-            requestedCount += 5; // Fetch 5 more MCQs
-            console.log(`Battleground: fetchUserMCQs - Need ${baseCount - subjectMCQs.length} more valid MCQs for ${subject}, increasing request to ${requestedCount}`);
+              const addedCount = Math.min(additionalCount, additionalMCQs.length);
+              allMCQs.push(...additionalMCQs.slice(0, additionalCount));
+              console.log(`Battleground: fetchUserMCQs - Added ${addedCount} additional MCQs for ${subject}`);
+              totalUnfilledQuota -= addedCount;
+            } catch (err) {
+              console.warn(`Battleground: fetchUserMCQs - Failed to fetch additional MCQs for ${subject} during redistribution:`, err.message);
+            }
           }
         }
-
-        if (subjectMCQs.length < baseCount) {
-          console.warn(`Battleground: fetchUserMCQs - Could only fetch ${subjectMCQs.length} valid MCQs for ${subject} (needed ${baseCount})`);
-        }
-
-        allMCQs.push(...subjectMCQs.slice(0, baseCount));
-        remainingQuestions -= Math.min(baseCount, subjectMCQs.length);
       }
 
-      console.log(`Battleground: fetchUserMCQs - Total valid MCQs fetched: ${allMCQs.length}`);
+      console.log(`Battleground: fetchUserMCQs - After redistribution, total MCQs fetched: ${allMCQs.length}, remaining unfilled quota: ${totalUnfilledQuota}`);
 
-      // If we didn't get enough MCQs, adjust TOTAL_QUESTIONS
-      if (allMCQs.length < DESIRED_QUESTIONS) {
-        console.warn(`Battleground: fetchUserMCQs - Only ${allMCQs.length} valid MCQs fetched, adjusting total questions`);
-        setTotalQuestions(allMCQs.length);
-      } else {
-        setTotalQuestions(DESIRED_QUESTIONS);
+      // If we didn't get any MCQs, throw an error
+      if (allMCQs.length === 0) {
+        throw new Error("No MCQs available for any subject. Please try again later.");
       }
 
-      // Shuffle and slice to the adjusted total
+      // Adjust TOTAL_QUESTIONS based on fetched MCQs
+      setTotalQuestions(allMCQs.length);
+      console.log(`Battleground: fetchUserMCQs - Adjusted total questions to ${allMCQs.length}`);
+
+      // Shuffle MCQs
       for (let i = allMCQs.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [allMCQs[i], allMCQs[j]] = [allMCQs[j], allMCQs[i]];

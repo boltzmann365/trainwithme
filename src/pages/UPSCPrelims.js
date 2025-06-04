@@ -1,6 +1,7 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth, Profile } from "../App";
+import NewsCard from "./subjects/NewsCard";
 
 // Import all images
 import economyImage from "../assets/economy.jpg";
@@ -12,14 +13,15 @@ import previousYearPaperImage from "../assets/previousyearpaper.jpg";
 import scienceImage from "../assets/Science.jpeg";
 import csatImage from "../assets/csat.jpg";
 import currentAffairsImage from "../assets/currentaffairs.webp";
-import prelimsBattlegroundImage from "../assets/prelimsbattleground.avif";
 
 const UPSCPrelims = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const [view, setView] = useState("news"); // Default to "news"
+  const [showProfile, setShowProfile] = useState(false); // Toggle Profile component
 
-  console.log("UpscPrelims: Rendered - location:", location.pathname);
+  console.log("UpscPrelims: Rendered - location:", location.pathname, "view:", view);
 
   const SUBJECTS = [
     { path: "/polity", name: "Polity", color: "from-blue-500 to-blue-700", hoverColor: "from-blue-600 to-blue-800", image: polityImage },
@@ -32,16 +34,6 @@ const UPSCPrelims = () => {
     { path: "/current-affairs", name: "Current Affairs", color: "from-indigo-500 to-indigo-700", hoverColor: "from-indigo-600 to-indigo-800", image: currentAffairsImage },
     { path: "/previous-year-papers", name: "Previous Year Papers", color: "from-cyan-500 to-cyan-700", hoverColor: "from-cyan-600 to-cyan-800", image: previousYearPaperImage },
   ];
-
-  const handleGoBack = () => {
-    console.log("UpscPrelims: handleGoBack - Navigating to UPSC.js (/)");
-    navigate("/"); // Explicitly navigate to the root path (UPSC.js)
-  };
-
-  const handleLogin = () => {
-    console.log("UpscPrelims: handleLogin - Navigating to /login");
-    navigate("/login", { state: { from: "/upsc-prelims" } });
-  };
 
   const handleSubjectClick = (path, action) => (e) => {
     console.log(`handleSubjectClick: path=${path}, user=${user ? user.uid : 'not logged in'}, action=${action ? 'present' : 'not present'}`);
@@ -58,106 +50,173 @@ const UPSCPrelims = () => {
     }
   };
 
+  const handleViewChange = (newView) => {
+    console.log("UpscPrelims: Changing view to:", newView);
+    setView(newView);
+    setShowProfile(false); // Close profile when changing views
+  };
+
+  const handleProfileClick = () => {
+    if (user) {
+      console.log("UpscPrelims: Toggling Profile component");
+      setShowProfile((prev) => !prev);
+    } else {
+      console.log("UpscPrelims: Navigating to login");
+      navigate("/login", { state: { from: location.pathname } });
+    }
+  };
+
   useEffect(() => {
     console.log("UpscPrelims: user or location changed - user:", user, "location:", location);
   }, [user, location]);
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white font-poppins overscroll-none">
+    <div className="min-h-screen bg-gray-900 text-white font-poppins overscroll-none relative">
       <nav className="fixed top-0 left-0 w-full bg-[#1F2526]/80 backdrop-blur-md p-3 flex justify-between items-center shadow-lg z-50 h-16">
         <div className="flex items-center gap-0.5 max-w-[40%]">
-          <button
-            onClick={handleGoBack}
-            className="text-zinc-300 hover:text-blue-400 transition-colors duration-300"
-          >
-            <svg
-              className="w-6 h-6"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
           <h1 className="text-lg sm:text-xl md:text-3xl font-extrabold tracking-tight text-blue-400">
             TrainWithMe
           </h1>
         </div>
-        <div className="flex items-center justify-end gap-1">
-          {user ? (
-            <Profile />
-          ) : (
-            <button
-              onClick={handleLogin}
-              className="bg-blue-600 text-gray-50 px-3 py-2 rounded-md hover:bg-blue-700 transition-transform transform hover:scale-105 duration-300 text-xs sm:text-base"
-            >
-              Login
-            </button>
-          )}
-        </div>
       </nav>
 
-      <div className="pt-16 pb-10 px-4 sm:px-6 lg:px-8 w-full overflow-y-auto">
-        <div
-          className="fixed top-16 left-0 w-full bg-[#1F2526]/80 backdrop-blur-md p-3 flex items-center shadow-lg z-40 h-16"
-          style={{
-            backgroundImage: `url(${prelimsBattlegroundImage})`,
-            backgroundSize: 'cover',
-            backgroundPosition: 'center',
-            backgroundRepeat: 'no-repeat',
-          }}
-        >
-          <div className="flex-grow"></div>
-          <Link
-            to="/battleground"
-            className="flex items-center space-x-2 text-white hover:text-blue-400 transition-colors duration-300 focus:outline-none"
-          >
-            <span className="text-lg sm:text-xl font-bold">
-              Enter Prelims Battleground
-            </span>
-            <svg
-              className="w-6 h-6"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
-            </svg>
-          </Link>
-        </div>
-
-        <div className="pt-20 w-full">
-          <div className="flex flex-row flex-wrap gap-4 sm:gap-6">
-            {SUBJECTS.map((subject, index) => (
-              <Link
-                key={index}
-                to={subject.path}
-                onClick={handleSubjectClick(subject.path, subject.action)}
-              >
-                <div
-                  className="relative w-[350px] sm:w-[300px] lg:w-[450px] h-48 sm:h-56 lg:h-64 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-2xl group cursor-pointer"
-                  style={{
-                    backgroundImage: subject.image ? `url(${subject.image})` : 'none',
-                    backgroundSize: 'cover',
-                    backgroundPosition: 'center',
-                    backgroundRepeat: 'no-repeat',
-                  }}
+      <div className="pt-16 pb-20 px-4 sm:px-6 lg:px-8 w-full overflow-y-auto">
+        <div className="pt-2 w-full">
+          {view === "test" ? (
+            <div className="flex flex-row flex-wrap gap-4 sm:gap-6">
+              {SUBJECTS.map((subject, index) => (
+                <Link
+                  key={index}
+                  to={subject.path}
+                  onClick={handleSubjectClick(subject.path, subject.action)}
                 >
-                  <div className="absolute inset-0 bg-black bg-opacity-50 rounded-lg group-hover:bg-opacity-40 transition-opacity duration-300"></div>
-                  <div className="absolute left-0 top-0 bottom-0 w-4 sm:w-6 bg-gray-800 opacity-80 rounded-l-lg shadow-lg">
-                    <div className="h-full w-1 bg-gray-700 opacity-90 absolute left-0 top-0"></div>
+                  <div
+                    className="relative w-[350px] sm:w-[300px] lg:w-[450px] h-48 sm:h-56 lg:h-64 rounded-lg shadow-lg transition-all duration-300 transform hover:scale-105 hover:shadow-2xl group cursor-pointer"
+                    style={{
+                      backgroundImage: subject.image ? `url(${subject.image})` : 'none',
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                      backgroundRepeat: 'no-repeat',
+                    }}
+                  >
+                    <div className="absolute inset-0 bg-black bg-opacity-50 rounded-lg group-hover:bg-opacity-40 transition-opacity duration-300"></div>
+                    <div className="absolute left-0 top-0 bottom-0 w-4 sm:w-6 bg-gray-800 opacity-80 rounded-l-lg shadow-lg">
+                      <div className="h-full w-1 bg-gray-700 opacity-90 absolute left-0 top-0"></div>
+                    </div>
+                    <div className="absolute left-4 sm:left-6 right-0 top-0 bottom-0 rounded-r-lg p-4 sm:p-6 flex flex-col justify-center items-center">
+                      <span className="text-white text-center font-bold text-sm sm:text-lg lg:text-xl line-clamp-3 z-10">
+                        {subject.name}
+                      </span>
+                    </div>
+                    <div className="absolute inset-0 rounded-lg shadow-[inset_-2px_2px_8px_rgba(0,0,0,0.3)] group-hover:shadow-[inset_-4px_4px_12px_rgba(0,0,0,0.4)] transition-shadow duration-300"></div>
                   </div>
-                  <div className="absolute left-4 sm:left-6 right-0 top-0 bottom-0 rounded-r-lg p-4 sm:p-6 flex flex-col justify-center items-center">
-                    <span className="text-white text-center font-bold text-sm sm:text-lg lg:text-xl line-clamp-3 z-10">
-                      {subject.name}
-                    </span>
-                  </div>
-                  <div className="absolute inset-0 rounded-lg shadow-[inset_-2px_2px_8px_rgba(0,0,0,0.3)] group-hover:shadow-[inset_-4px_4px_12px_rgba(0,0,0,0.4)] transition-shadow duration-300"></div>
-                </div>
-              </Link>
-            ))}
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <NewsCard />
+          )}
+        </div>
+      </div>
+
+      <div className="fixed bottom-0 left-0 w-full bg-[#1F2526]/90 backdrop-blur-md h-16 flex justify-center items-center z-50">
+        <div className="flex w-full max-w-screen-lg">
+          <div className="flex-1 flex justify-center items-center">
+            <button
+              onClick={() => handleViewChange("news")}
+              className={`flex flex-col items-center ${view === "news" ? "text-blue-400" : "text-gray-400"} hover:text-blue-400 transition-colors duration-300 w-full`}
+            >
+              <svg
+                className="w-6 h-6"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 10h.01M15 10h.01M12 14h.01" />
+              </svg>
+              <span className="text-xs mt-1">News</span>
+            </button>
+          </div>
+          <div className="h-8 w-px bg-gray-600 self-center mx-2" />
+          <div className="flex-1 flex justify-center items-center">
+            <button
+              onClick={() => handleViewChange("test")}
+              className={`flex flex-col items-center ${view === "test" ? "text-blue-400" : "text-gray-400"} hover:text-blue-400 transition-colors duration-300 w-full`}
+            >
+              <svg
+                className="w-6 h-6"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 26"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+              </svg>
+              <span className="text-xs mt-1">Tests</span>
+            </button>
+          </div>
+          <div className="h-8 w-px bg-gray-600 self-center mx-2" />
+          <div className="flex-1 flex justify-center items-center">
+            <Link to="/battleground" className="w-full flex justify-center">
+              <button
+                className={`flex flex-col items-center ${location.pathname === "/battleground" ? "text-blue-400" : "text-gray-400"} hover:text-blue-400 transition-colors duration-300 w-full`}
+              >
+                <svg
+                  className="w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 4l7 7-7 7M11 4l-7 7 7 7" />
+                </svg>
+                <span className="text-xs mt-1">Battleground</span>
+              </button>
+            </Link>
+          </div>
+          <div className="h-8 w-px bg-gray-600 self-center mx-2" />
+          <div className="flex-1 flex justify-center items-center">
+            <Link to="/oneliners" className="w-full flex justify-center">
+              <button
+                className={`flex flex-col items-center ${location.pathname === "/oneliners" ? "text-blue-400" : "text-gray-400"} hover:text-blue-400 transition-colors duration-300 w-full`}
+              >
+                <svg
+                  className="w-6 h-6"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.79 4 4 0 4.42-4.48 7.5-8 11-3.52-3.5-8-6.58-8-11 0-2.21 1.79-4 4-4 1.742 0 3.223.835 3.772 2z" />
+                </svg>
+                <span className="text-xs mt-1">Q & A</span>
+              </button>
+            </Link>
+          </div>
+          <div className="h-8 w-px bg-gray-600 self-center mx-2" />
+          <div className="flex-1 flex justify-center items-center relative">
+            <button
+              onClick={handleProfileClick}
+              className={`flex flex-col items-center ${showProfile ? "text-blue-400" : "text-gray-400"} hover:text-blue-400 transition-colors duration-300 w-full`}
+            >
+              <svg
+                className="w-6 h-6"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+              <span className="text-xs mt-1">{user ? "Profile" : "Login"}</span>
+            </button>
+            {user && showProfile && (
+              <div className="absolute bottom-16 right-0 bg-[#1F2526] rounded-md shadow-lg p-2 z-100">
+                <Profile />
+              </div>
+            )}
           </div>
         </div>
       </div>
