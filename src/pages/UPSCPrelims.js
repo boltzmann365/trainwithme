@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { useAuth, Profile } from "../App";
+import { useAuth } from "../App";
 import NewsCard from "./subjects/NewsCard";
+import BottomBar from "./subjects/BottomBar";
+import Profile from "./subjects/Profile";
 
 // Import all images
 import economyImage from "../assets/economy.jpg";
@@ -13,15 +15,26 @@ import previousYearPaperImage from "../assets/previousyearpaper.jpg";
 import scienceImage from "../assets/Science.jpeg";
 import csatImage from "../assets/csat.jpg";
 import currentAffairsImage from "../assets/currentaffairs.webp";
+import "@fontsource/inter-tight/700.css"; // Import Inter Tight for Perplexity-like font
 
 const UPSCPrelims = () => {
-  const navigate = useNavigate();
   const location = useLocation();
+  const navigate = useNavigate();
   const { user } = useAuth();
-  const [view, setView] = useState("news"); // Default to "news"
-  const [showProfile, setShowProfile] = useState(false); // Toggle Profile component
+  const [showProfile, setShowProfile] = useState(false);
+  const [showHeader, setShowHeader] = useState(true);
+  const lastScrollY = useRef(0);
 
-  console.log("UpscPrelims: Rendered - location:", location.pathname, "view:", view);
+  // Query param logic for view
+  const [view, setView] = useState(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get("view") || "news";
+  });
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const newView = params.get("view") || "news";
+    if (newView !== view) setView(newView);
+  }, [location.search, view]);
 
   const SUBJECTS = [
     { path: "/polity", name: "Polity", color: "from-blue-500 to-blue-700", hoverColor: "from-blue-600 to-blue-800", image: polityImage },
@@ -50,37 +63,105 @@ const UPSCPrelims = () => {
     }
   };
 
-  const handleViewChange = (newView) => {
-    console.log("UpscPrelims: Changing view to:", newView);
-    setView(newView);
-    setShowProfile(false); // Close profile when changing views
-  };
-
-  const handleProfileClick = () => {
-    if (user) {
-      console.log("UpscPrelims: Toggling Profile component");
-      setShowProfile((prev) => !prev);
-    } else {
-      console.log("UpscPrelims: Navigating to login");
-      navigate("/login", { state: { from: location.pathname } });
-    }
-  };
-
   useEffect(() => {
     console.log("UpscPrelims: user or location changed - user:", user, "location:", location);
   }, [user, location]);
 
+  useEffect(() => {
+    const handleScroll = () => {
+      const currentScrollY = window.scrollY;
+      if (currentScrollY > lastScrollY.current && currentScrollY > 40) {
+        setShowHeader(false); // Hide on scroll down
+      } else {
+        setShowHeader(true); // Show on scroll up
+      }
+      lastScrollY.current = currentScrollY;
+    };
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
   return (
     <div className="min-h-screen bg-gray-900 text-white font-poppins overscroll-none relative">
-      <nav className="fixed top-0 left-0 w-full bg-[#1F2526]/80 backdrop-blur-md p-3 flex justify-between items-center shadow-lg z-50 h-16">
-        <div className="flex items-center gap-0.5 max-w-[40%]">
-          <h1 className="text-lg sm:text-xl md:text-3xl font-extrabold tracking-tight text-blue-400">
-            TrainWithMe
-          </h1>
-        </div>
-      </nav>
+      {/* Show header and profile only if NOT in news view */}
+      {view !== "news" && (
+        <>
+          {/* TrainWithMe at top left */}
+          <div
+            className={`fixed top-0.5 left-4 z-50 pointer-events-none select-none transition-transform duration-300 ${
+              showHeader ? "translate-y-0 opacity-100" : "-translate-y-16 opacity-0"
+            }`}
+          >
+            <span
+              className="text-2xl sm:text-2xl md:text-3xl font-extrabold tracking-tight text-white transition-transform duration-200 hover:-translate-y-1 hover:scale-105"
+              style={{
+                fontFamily: '"Inter Tight", "Inter", "Segoe UI", "Arial", sans-serif',
+                fontWeight: 700,
+                letterSpacing: "-0.03em",
+              }}
+            >
+              trainwithme
+            </span>
+          </div>
+          {/* Profile button at top right */}
+          <div
+            className={`fixed top-0.5 right-2 z-50 pointer-events-auto transition-transform duration-300 ${
+              showHeader ? "translate-y-0 opacity-100" : "-translate-y-16 opacity-0"
+            }`}
+          >
+            <button
+              onClick={() => {
+                if (user) setShowProfile((prev) => !prev);
+                else navigate("/login", { state: { from: location.pathname } });
+              }}
+              className="flex items-center gap-2 focus:outline-none"
+            >
+              {user ? (
+                <span className="w-9 h-9 flex items-center justify-center rounded-full bg-gray-800 text-white font-bold text-2xl shadow hover:bg-gray-700 transition-colors duration-200 select-none">
+                  {user.displayName
+                    ? user.displayName
+                        .split(" ")
+                        .map((n) => n[0])
+                        .join("")
+                        .toUpperCase()
+                    : user.email
+                    ? user.email[0].toUpperCase()
+                    : "U"}
+                </span>
+              ) : (
+                <span className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white px-3 py-2 rounded-lg shadow transition-colors duration-200">
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                  <span className="hidden sm:inline">Login</span>
+                </span>
+              )}
+            </button>
+            {user && showProfile && (
+              <div className="absolute right-0 mt-2 z-[100] flex flex-col items-end">
+                <div className="w-40 bg-gray-800 rounded-xl shadow-lg py-6 flex flex-col items-center">
+                  <div className="text-white text-sm mb-4 break-all text-center">
+                    {user.email}
+                  </div>
+                  <button
+                    onClick={() => {
+                      if (window.confirm("Are you sure you want to logout?")) {
+                        window.location.href = "/logout";
+                      }
+                    }}
+                    className="w-28 mt-2 bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors duration-200"
+                  >
+                    Logout
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
-      <div className="pt-16 pb-20 px-4 sm:px-6 lg:px-8 w-full overflow-y-auto">
+      {/* Main content */}
+      <div className="pt-8 pb-20 px-4 sm:px-6 lg:px-8 w-full overflow-y-auto relative z-40">
         <div className="pt-2 w-full">
           {view === "test" ? (
             <div className="flex flex-row flex-wrap gap-4 sm:gap-6">
@@ -113,113 +194,15 @@ const UPSCPrelims = () => {
                 </Link>
               ))}
             </div>
-          ) : (
+          ) : view === "news" ? (
             <NewsCard />
+          ) : (
+            <div className="text-white">Invalid view: {view}</div>
           )}
         </div>
       </div>
 
-      <div className="fixed bottom-0 left-0 w-full bg-[#1F2526]/90 backdrop-blur-md h-16 flex justify-center items-center z-50">
-        <div className="flex w-full max-w-screen-lg">
-          <div className="flex-1 flex justify-center items-center">
-            <button
-              onClick={() => handleViewChange("news")}
-              className={`flex flex-col items-center ${view === "news" ? "text-blue-400" : "text-gray-400"} hover:text-blue-400 transition-colors duration-300 w-full`}
-            >
-              <svg
-                className="w-6 h-6"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 10h.01M15 10h.01M12 14h.01" />
-              </svg>
-              <span className="text-xs mt-1">News</span>
-            </button>
-          </div>
-          <div className="h-8 w-px bg-gray-600 self-center mx-2" />
-          <div className="flex-1 flex justify-center items-center">
-            <button
-              onClick={() => handleViewChange("test")}
-              className={`flex flex-col items-center ${view === "test" ? "text-blue-400" : "text-gray-400"} hover:text-blue-400 transition-colors duration-300 w-full`}
-            >
-              <svg
-                className="w-6 h-6"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 26"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-              </svg>
-              <span className="text-xs mt-1">Tests</span>
-            </button>
-          </div>
-          <div className="h-8 w-px bg-gray-600 self-center mx-2" />
-          <div className="flex-1 flex justify-center items-center">
-            <Link to="/battleground" className="w-full flex justify-center">
-              <button
-                className={`flex flex-col items-center ${location.pathname === "/battleground" ? "text-blue-400" : "text-gray-400"} hover:text-blue-400 transition-colors duration-300 w-full`}
-              >
-                <svg
-                  className="w-6 h-6"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 4l7 7-7 7M11 4l-7 7 7 7" />
-                </svg>
-                <span className="text-xs mt-1">Battleground</span>
-              </button>
-            </Link>
-          </div>
-          <div className="h-8 w-px bg-gray-600 self-center mx-2" />
-          <div className="flex-1 flex justify-center items-center">
-            <Link to="/oneliners" className="w-full flex justify-center">
-              <button
-                className={`flex flex-col items-center ${location.pathname === "/oneliners" ? "text-blue-400" : "text-gray-400"} hover:text-blue-400 transition-colors duration-300 w-full`}
-              >
-                <svg
-                  className="w-6 h-6"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.79 4 4 0 4.42-4.48 7.5-8 11-3.52-3.5-8-6.58-8-11 0-2.21 1.79-4 4-4 1.742 0 3.223.835 3.772 2z" />
-                </svg>
-                <span className="text-xs mt-1">Q & A</span>
-              </button>
-            </Link>
-          </div>
-          <div className="h-8 w-px bg-gray-600 self-center mx-2" />
-          <div className="flex-1 flex justify-center items-center relative">
-            <button
-              onClick={handleProfileClick}
-              className={`flex flex-col items-center ${showProfile ? "text-blue-400" : "text-gray-400"} hover:text-blue-400 transition-colors duration-300 w-full`}
-            >
-              <svg
-                className="w-6 h-6"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-              </svg>
-              <span className="text-xs mt-1">{user ? "Profile" : "Login"}</span>
-            </button>
-            {user && showProfile && (
-              <div className="absolute bottom-16 right-0 bg-[#1F2526] rounded-md shadow-lg p-2 z-100">
-                <Profile />
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+      <BottomBar view={view} setView={setView} hideProfile />
     </div>
   );
 };

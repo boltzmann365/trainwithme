@@ -1,12 +1,11 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "../../App";
+import { useAuth, useQanda } from "../../App";
 
 const Battleground = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [showInstructionsPopup, setShowInstructionsPopup] = useState(true);
-  const [isAgreeButtonDisabled, setIsAgreeButtonDisabled] = useState(false);
+  const { mcqs, setMcqs, fetchNewInitialMCQs, isMcqsFetching, cachedMcqs, setCachedMcqs } = useQanda();
   const [testStarted, setTestStarted] = useState(false);
   const [questions, setQuestions] = useState([]);
   const [userAnswers, setUserAnswers] = useState([]);
@@ -15,59 +14,45 @@ const Battleground = () => {
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState("");
   const [error, setError] = useState(null);
-  const [selectedOption, setSelectedOption] = useState(null);
+  const [selectedOption, setSelectedOption] = useState("");
   const [showExplanation, setShowExplanation] = useState(false);
   const [score, setScore] = useState(null);
   const [showScorePopup, setShowScorePopup] = useState(false);
-  const [isScoreMinimized, setIsScoreMinimized] = useState(false);
+  const [isScoreMinimized, setIsScoreMinimized] = useState(true);
   const [filter, setFilter] = useState("all");
-  const [showModeSidebar, setShowModeSidebar] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(false);
   const [fontSize, setFontSize] = useState(24);
   const [maxQuestionReached, setMaxQuestionReached] = useState(0);
   const [leaderboard, setLeaderboard] = useState([]);
   const [showLeaderboardPopup, setShowLeaderboardPopup] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(60 * 60);
+  const [timeLeft, setTimeLeft] = useState(10 * 60); // Default 10 minutes
   const [timerActive, setTimerActive] = useState(false);
-  const [totalQuestions, setTotalQuestions] = useState(100); // Make TOTAL_QUESTIONS dynamic
+  const [totalQuestions, setTotalQuestions] = useState(10);
 
   const [scoreDetails, setScoreDetails] = useState({
     totalQuestions: 0,
     attempted: 0,
-    correct: 0,
-    wrong: 0,
+    answeredCorrectly: 0,
+    answeredIncorrectly: 0,
     unattempted: 0,
     totalScore: 0,
     percentage: 0,
   });
 
-  const API_URL = process.env.REACT_APP_API_URL || "http://localhost:3001";
-  const DESIRED_QUESTIONS = 100; // Desired number of questions
+  const API_URL = process.env.REACT_APP_API_URL || "https://new-backend-tx3z.onrender.com";
   const PRELIMS_CUTOFF = 50;
+  const isFetchingRef = useRef(false);
+  const hasInitialized = useRef(false);
 
-  const getUserId = () => {
-    if (user?.email) {
-      const emailLower = user.email.toLowerCase();
-      return emailLower.endsWith('@gmail.com')
-        ? emailLower.split('@')[0]
-        : emailLower;
-    }
-    const storedUserId = localStorage.getItem('trainWithMeUserId');
-    if (storedUserId) return storedUserId;
-    const newUserId = Math.random().toString(36).substring(7);
-    localStorage.setItem('trainWithMeUserId', newUserId);
-    return newUserId;
-  };
+  useEffect(() => {
+    console.log("Battleground: Initial state", { user, testStarted, loading, error });
+  }, [user]);
 
-  const userId = useRef(getUserId()).current;
-
-  console.log("Battleground: Rendered - showInstructionsPopup:", showInstructionsPopup, "testStarted:", testStarted, "user:", user);
-
-  // Timer logic
   useEffect(() => {
     let timer;
     if (timerActive && timeLeft > 0) {
       timer = setInterval(() => {
-        setTimeLeft(prev => {
+        setTimeLeft((prev) => {
           if (prev <= 1) {
             clearInterval(timer);
             setTimerActive(false);
@@ -79,283 +64,180 @@ const Battleground = () => {
       }, 1000);
     }
     return () => clearInterval(timer);
-  }, [timerActive, timeLeft]);
+  }, [timerActive]);
 
-  // Format time as MM:SS
   const formatTime = (seconds) => {
     const minutes = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${minutes}:${secs < 10 ? "0" : ""}${secs}`;
   };
 
-  // Navigate back to /upsc-prelims when "Go Back" is clicked
   const handleGoBack = () => {
-    console.log("Battleground: handleGoBack - Navigating to /upsc-prelims");
+    fetchNewInitialMCQs(); // Run in background
     navigate("/upsc-prelims");
   };
 
-  // Fetch MCQs until we have the desired number of valid questions
-  const fetchUserMCQs = async () => {
-    setLoading(true);
-    setLoadingMessage("Loading Prelims Battleground MCQs...");
-    setError(null);
-
+  const batchFetchMCQs = async (subjects, requestedCountPerSubject, initialMCQIds, apiUrl) => {
     try {
-      console.log("Battleground: fetchUserMCQs - Fetching MCQs with userId:", userId);
-      if (!userId) {
-        throw new Error("userId is undefined or empty");
+      const books = subjects.map(subject => ({
+        book: subject,
+        requestedCount: requestedCountPerSubject
+      }));
+
+      const response = await fetch(`${apiUrl}/user/get-multi-book-mcqs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ books })
+      });
+
+      if (!response.ok) {
+        console.warn(`Failed to fetch MCQs: HTTP ${response.status}`);
+        return [];
       }
 
+      const data = await response.json();
+      if (!data.mcqs || data.mcqs.length === 0) {
+        console.warn("No MCQs returned from batch endpoint");
+        return [];
+      }
+
+      const transformedMCQs = data.mcqs
+        .filter(mcq => {
+          if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
+            return false;
+          }
+          if (initialMCQIds.includes(mcq._id?.toString())) {
+            return false;
+          }
+          return true;
+        })
+        .map(mcq => ({
+          question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
+          options: mcq.mcq.options,
+          correctAnswer: mcq.mcq.correctAnswer,
+          explanation: mcq.mcq.explanation,
+          category: mcq.category || "",
+          id: mcq._id,
+        }));
+
+      return transformedMCQs;
+    } catch (err) {
+      console.error("Error in batchFetchMCQs:", err);
+      return [];
+    }
+  };
+
+  const fetchRemainingMCQs = async (desiredCount, initialMCQIds) => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+
+    console.log("Battleground: fetchRemainingMCQs called with desiredCount", desiredCount);
+
+    try {
       const subjects = [
         "Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture",
         "FundamentalGeography", "IndianGeography", "Science",
-        "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers"
+        "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers",
       ];
-      let allMCQs = [];
-      let remainingQuestions = DESIRED_QUESTIONS;
-      const questionsPerSubject = Math.floor(DESIRED_QUESTIONS / subjects.length);
-      const extraQuestions = DESIRED_QUESTIONS % subjects.length;
+      const remainingCount = Math.max(desiredCount - questions.length, 0);
+      const questionsPerSubject = Math.ceil(remainingCount / subjects.length);
+      let remainingMCQs = [];
 
-      // Track subjects that successfully provided MCQs and unfilled quotas
-      const subjectResults = [];
-      let totalUnfilledQuota = 0;
+      console.log(`Battleground: Attempting to fetch ${remainingCount} remaining MCQs`);
 
-      // Initial fetch for each subject
-      for (let i = 0; i < subjects.length && remainingQuestions > 0; i++) {
-        const subject = subjects[i];
-        const baseCount = questionsPerSubject + (i < extraQuestions ? 1 : 0);
-        let requestedCount = baseCount;
-        let subjectMCQs = [];
+      remainingMCQs = await batchFetchMCQs(subjects, questionsPerSubject, initialMCQIds, API_URL);
 
-        try {
-          while (subjectMCQs.length < baseCount && requestedCount <= 50) { // Cap to avoid infinite loops
-            console.log(`Battleground: fetchUserMCQs - Fetching ${requestedCount} MCQs for subject: ${subject}`);
-
-            const response = await fetch(`${API_URL}/user/get-book-mcqs`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ userId, book: subject, requestedCount }),
-            });
-
-            if (!response.ok) {
-              const errorData = await response.json();
-              console.warn(`Battleground: fetchUserMCQs - Failed to fetch MCQs for ${subject}:`, errorData);
-              break; // Skip this subject and continue with the next
-            }
-
-            const data = await response.json();
-            console.log(`Battleground: fetchUserMCQs - Received ${data.mcqs?.length || 0} MCQs for ${subject}:`, data.mcqs);
-            if (!data.mcqs || data.mcqs.length === 0) {
-              console.warn(`Battleground: fetchUserMCQs - No new MCQs available for ${subject}`);
-              break;
-            }
-
-            const transformedMCQs = data.mcqs
-              .filter(mcq => {
-                if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
-                  console.warn(`Battleground: fetchUserMCQs - Invalid MCQ found in ${subject} and skipped:`, mcq);
-                  return false;
-                }
-                return true;
-              })
-              .map(mcq => ({
-                question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
-                options: mcq.mcq.options,
-                correctAnswer: mcq.mcq.correctAnswer,
-                explanation: mcq.mcq.explanation,
-                category: subject,
-                id: mcq._id
-              }));
-
-            console.log(`Battleground: fetchUserMCQs - Transformed ${transformedMCQs.length} valid MCQs for ${subject} (out of ${data.mcqs.length} fetched)`);
-            subjectMCQs.push(...transformedMCQs);
-
-            if (subjectMCQs.length < baseCount) {
-              requestedCount += 5; // Fetch 5 more MCQs
-              console.log(`Battleground: fetchUserMCQs - Need ${baseCount - subjectMCQs.length} more valid MCQs for ${subject}, increasing request to ${requestedCount}`);
-            }
-          }
-
-          const fetchedCount = Math.min(baseCount, subjectMCQs.length);
-          if (fetchedCount < baseCount) {
-            const unfilled = baseCount - fetchedCount;
-            console.warn(`Battleground: fetchUserMCQs - Could only fetch ${fetchedCount} valid MCQs for ${subject} (needed ${baseCount}), unfilled quota: ${unfilled}`);
-            totalUnfilledQuota += unfilled;
-          }
-
-          allMCQs.push(...subjectMCQs.slice(0, baseCount));
-          remainingQuestions -= fetchedCount;
-
-          // Track the subject and how many MCQs it provided
-          subjectResults.push({ subject, fetchedCount, mcqs: subjectMCQs.slice(0, baseCount) });
-        } catch (err) {
-          console.warn(`Battleground: fetchUserMCQs - Skipping subject ${subject} due to error:`, err.message);
-          totalUnfilledQuota += baseCount;
-          remainingQuestions -= baseCount;
-          subjectResults.push({ subject, fetchedCount: 0, mcqs: [] });
-        }
+      if (remainingMCQs.length > 0) {
+        setQuestions(prevQuestions => {
+          const allMCQs = [...prevQuestions, ...remainingMCQs];
+          return allMCQs.slice(0, desiredCount);
+        });
+        setMcqs(prevMcqs => {
+          const allMCQs = [...prevMcqs, ...remainingMCQs];
+          return allMCQs.slice(0, desiredCount);
+        });
+        setUserAnswers(prevAnswers => [...prevAnswers, ...new Array(remainingMCQs.length).fill(null)]);
+        setQuestionStatuses(prevStatuses => [...prevStatuses, ...new Array(remainingMCQs.length).fill("unattempted")]);
+        setTotalQuestions(desiredCount);
       }
 
-      console.log(`Battleground: fetchUserMCQs - Initial fetch completed. Total MCQs: ${allMCQs.length}, Unfilled quota: ${totalUnfilledQuota}`);
+      console.log("Battleground: Fetched remaining MCQs", remainingMCQs.length);
 
-      // Redistribute unfilled quota to subjects that provided MCQs
-      if (totalUnfilledQuota > 0) {
-        const successfulSubjects = subjectResults.filter(result => result.fetchedCount > 0).map(result => result.subject);
-        console.log(`Battleground: fetchUserMCQs - Successful subjects for redistribution:`, successfulSubjects);
-
-        if (successfulSubjects.length > 0) {
-          const extraPerSubject = Math.floor(totalUnfilledQuota / successfulSubjects.length);
-          const extraRemainder = totalUnfilledQuota % successfulSubjects.length;
-
-          for (let i = 0; i < successfulSubjects.length; i++) {
-            const subject = successfulSubjects[i];
-            const additionalCount = extraPerSubject + (i < extraRemainder ? 1 : 0);
-            if (additionalCount <= 0) continue;
-
-            try {
-              let requestedCount = additionalCount;
-              let additionalMCQs = [];
-              console.log(`Battleground: fetchUserMCQs - Redistributing: Fetching ${requestedCount} additional MCQs for ${subject}`);
-
-              while (additionalMCQs.length < additionalCount && requestedCount <= 50) {
-                const response = await fetch(`${API_URL}/user/get-book-mcqs`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ userId, book: subject, requestedCount }),
-                });
-
-                if (!response.ok) {
-                  const errorData = await response.json();
-                  console.warn(`Battleground: fetchUserMCQs - Failed to fetch additional MCQs for ${subject}:`, errorData);
-                  break;
-                }
-
-                const data = await response.json();
-                console.log(`Battleground: fetchUserMCQs - Received ${data.mcqs?.length || 0} additional MCQs for ${subject}:`, data.mcqs);
-                if (!data.mcqs || data.mcqs.length === 0) {
-                  console.warn(`Battleground: fetchUserMCQs - No more MCQs available for ${subject}`);
-                  break;
-                }
-
-                const transformedMCQs = data.mcqs
-                  .filter(mcq => {
-                    // Avoid duplicates by checking if the MCQ ID is already in allMCQs
-                    if (allMCQs.some(existing => existing.id === mcq._id)) {
-                      return false;
-                    }
-                    if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
-                      console.warn(`Battleground: fetchUserMCQs - Invalid additional MCQ found in ${subject} and skipped:`, mcq);
-                      return false;
-                    }
-                    return true;
-                  })
-                  .map(mcq => ({
-                    question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
-                    options: mcq.mcq.options,
-                    correctAnswer: mcq.mcq.correctAnswer,
-                    explanation: mcq.mcq.explanation,
-                    category: subject,
-                    id: mcq._id
-                  }));
-
-                console.log(`Battleground: fetchUserMCQs - Transformed ${transformedMCQs.length} additional valid MCQs for ${subject}`);
-                additionalMCQs.push(...transformedMCQs);
-
-                if (additionalMCQs.length < additionalCount) {
-                  requestedCount += 5;
-                  console.log(`Battleground: fetchUserMCQs - Need ${additionalCount - additionalMCQs.length} more valid MCQs for ${subject}, increasing request to ${requestedCount}`);
-                }
-              }
-
-              const addedCount = Math.min(additionalCount, additionalMCQs.length);
-              allMCQs.push(...additionalMCQs.slice(0, additionalCount));
-              console.log(`Battleground: fetchUserMCQs - Added ${addedCount} additional MCQs for ${subject}`);
-              totalUnfilledQuota -= addedCount;
-            } catch (err) {
-              console.warn(`Battleground: fetchUserMCQs - Failed to fetch additional MCQs for ${subject} during redistribution:`, err.message);
-            }
-          }
-        }
+      if (questions.length + remainingMCQs.length < desiredCount) {
+        setError(`Warning: Loaded ${questions.length + remainingMCQs.length} out of ${desiredCount} requested MCQs. Some subjects may have no available questions.`);
       }
-
-      console.log(`Battleground: fetchUserMCQs - After redistribution, total MCQs fetched: ${allMCQs.length}, remaining unfilled quota: ${totalUnfilledQuota}`);
-
-      // If we didn't get any MCQs, throw an error
-      if (allMCQs.length === 0) {
-        throw new Error("No MCQs available for any subject. Please try again later.");
-      }
-
-      // Adjust TOTAL_QUESTIONS based on fetched MCQs
-      setTotalQuestions(allMCQs.length);
-      console.log(`Battleground: fetchUserMCQs - Adjusted total questions to ${allMCQs.length}`);
-
-      // Shuffle MCQs
-      for (let i = allMCQs.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [allMCQs[i], allMCQs[j]] = [allMCQs[j], allMCQs[i]];
-      }
-
-      const finalMCQs = allMCQs.slice(0, totalQuestions);
-
-      setQuestions(finalMCQs);
-      setUserAnswers(new Array(finalMCQs.length).fill(null));
-      setQuestionStatuses(new Array(finalMCQs.length).fill("unattempted"));
-      setCurrentQuestionIndex(0);
-      setScore(null);
-      setSelectedOption(null);
-      setShowExplanation(false);
-      setShowScorePopup(false);
-      setShowLeaderboardPopup(false);
-      setIsScoreMinimized(false);
-      setTestStarted(true);
-      setShowInstructionsPopup(false);
-      setTimeLeft(60 * 60);
-      setTimerActive(true);
-      console.log(`Battleground: fetchUserMCQs - Loaded ${finalMCQs.length} MCQs for user ${userId}`);
     } catch (err) {
-      let errorMessage = "Failed to load MCQs. Please try again later.";
-      if (err.message.includes("Failed to fetch")) {
-        errorMessage = "Unable to connect to the server. Please ensure the backend server is running and try again.";
-      }
-      setError(errorMessage);
-      setTestStarted(false);
-      setShowInstructionsPopup(true);
-      setIsAgreeButtonDisabled(false);
-      console.error("Battleground: fetchUserMCQs error:", err.message);
+      console.error("Error in fetchRemainingMCQs:", err);
+      setError("Failed to load additional MCQs. Please try again.");
     } finally {
-      setLoading(false);
+      isFetchingRef.current = false;
     }
   };
 
-  // Start the battleground test when "I Agree" is clicked
-  const startBattleground = () => {
-    console.log("Battleground: startBattleground - Starting test");
+  useEffect(() => {
     if (!user) {
-      console.log("Battleground: User not logged in, redirecting to login");
+      console.log("Battleground: No user, redirecting to login");
       navigate("/login", { state: { from: "/battleground" } });
       return;
     }
-    setIsAgreeButtonDisabled(true);
-    setShowInstructionsPopup(false);
-    setLoading(true);
-    setLoadingMessage("Loading MCQs...");
-    fetchUserMCQs();
+
+    if (!hasInitialized.current) {
+      if (mcqs.length > 0) {
+        console.log("Battleground: Initializing 10-question test with preloaded MCQs", mcqs.length);
+        hasInitialized.current = true;
+        setQuestions([...mcqs]);
+        setUserAnswers(new Array(mcqs.length).fill(null));
+        setQuestionStatuses(new Array(mcqs.length).fill("unattempted"));
+        setCurrentQuestionIndex(0);
+        setScore(null);
+        setSelectedOption("");
+        setShowExplanation(false);
+        setShowScorePopup(false);
+        setShowLeaderboardPopup(false);
+        setIsScoreMinimized(true);
+        setTestStarted(true);
+        setTimerActive(true);
+        setTotalQuestions(10);
+        setLoading(false);
+      } else if (isMcqsFetching) {
+        console.log("Battleground: Waiting for initial MCQs to load");
+        setLoading(true);
+        setLoadingMessage("Loading MCQs...");
+      } else {
+        console.log("Battleground: No preloaded MCQs and not fetching, setting error");
+        setError("Failed to load initial MCQs. Please try again.");
+        setLoading(false);
+        setTestStarted(false);
+      }
+    }
+  }, [user, navigate, mcqs, isMcqsFetching]);
+
+  useEffect(() => {
+    if (testStarted && questions.length > 0 && questions.length < totalQuestions && !isFetchingRef.current) {
+      console.log("Battleground: Triggering fetchRemainingMCQs", { desired: totalQuestions, current: questions.length });
+      fetchRemainingMCQs(totalQuestions, questions.map(q => q.id.toString()));
+    }
+  }, [testStarted, questions.length, totalQuestions]);
+
+  const toggleSidebar = () => {
+    if (!showSidebar && cachedMcqs.length < 3) {
+      fetchNewInitialMCQs(); // Run in background only if cache is low
+    }
+    setShowSidebar(prev => !prev);
   };
 
-  // Fetch leaderboard data
   const fetchLeaderboard = async () => {
-    console.log("Battleground: fetchLeaderboard - Fetching leaderboard...");
     try {
       const res = await fetch(`${API_URL}/battleground/leaderboard`, {
-        method: "GET",
         headers: { "Content-Type": "application/json" },
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setLeaderboard(data.rankings || []);
-      console.log("Battleground: fetchLeaderboard - Successfully fetched leaderboard:", data.rankings);
+      console.log("Battleground: Fetched leaderboard", data.rankings?.length || 0);
     } catch (error) {
-      console.error("Battleground: fetchLeaderboard error:", error.message);
+      console.error("Error fetching leaderboard:", error.message);
+      setLeaderboard([]);
     }
   };
 
@@ -363,7 +245,6 @@ const Battleground = () => {
     fetchLeaderboard();
   }, []);
 
-  // Dynamic font size adjustment for question content
   useEffect(() => {
     const questionBox = document.querySelector('.question-box');
     const content = document.querySelector('.question-content');
@@ -400,10 +281,9 @@ const Battleground = () => {
   };
 
   const handleNextQuestion = () => {
-    if (currentQuestionIndex >= totalQuestions - 1) return;
+    if (currentQuestionIndex >= totalQuestions - 1 || currentQuestionIndex >= questions.length - 1) return;
 
-    // Mark the current question as unattempted if no option is selected
-    if (selectedOption === null) {
+    if (selectedOption === "") {
       const newStatuses = [...questionStatuses];
       newStatuses[currentQuestionIndex] = "unattempted";
       setQuestionStatuses(newStatuses);
@@ -411,7 +291,7 @@ const Battleground = () => {
 
     const nextIndex = currentQuestionIndex + 1;
     setCurrentQuestionIndex(nextIndex);
-    setSelectedOption(userAnswers[nextIndex]);
+    setSelectedOption(userAnswers[nextIndex] || "");
     setShowExplanation(false);
     if (nextIndex > maxQuestionReached) {
       setMaxQuestionReached(nextIndex);
@@ -420,8 +300,7 @@ const Battleground = () => {
 
   const handlePreviousQuestion = () => {
     if (currentQuestionIndex > 0) {
-      // Mark the current question as unattempted if no option is selected
-      if (selectedOption === null) {
+      if (selectedOption === "") {
         const newStatuses = [...questionStatuses];
         newStatuses[currentQuestionIndex] = "unattempted";
         setQuestionStatuses(newStatuses);
@@ -429,14 +308,14 @@ const Battleground = () => {
 
       const prevIndex = currentQuestionIndex - 1;
       setCurrentQuestionIndex(prevIndex);
-      setSelectedOption(userAnswers[prevIndex]);
+      setSelectedOption(userAnswers[prevIndex] || "");
       setShowExplanation(false);
     }
   };
 
   const submitTest = () => {
     let newAnswers = [...userAnswers];
-    if (selectedOption !== null) {
+    if (selectedOption !== "") {
       newAnswers[currentQuestionIndex] = selectedOption;
       setUserAnswers(newAnswers);
     }
@@ -447,7 +326,7 @@ const Battleground = () => {
     const newStatuses = [...questionStatuses];
 
     newAnswers.forEach((answer, index) => {
-      if (answer !== null) {
+      if (answer && index < questions.length) {
         attempted++;
         if (answer === questions[index].correctAnswer) {
           correctCount++;
@@ -463,43 +342,27 @@ const Battleground = () => {
 
     setQuestionStatuses(newStatuses);
 
-    const unattempted = totalQuestions - attempted;
+    const unattempted = questions.length - attempted;
     const totalScore = (correctCount * 2) - (wrongCount * 0.66);
-    const percentage = (totalScore / (totalQuestions * 2)) * 100; // Adjust denominator based on total questions
+    const percentage = (totalScore / (questions.length * 2)) * 100;
 
     setScore(totalScore);
     setCurrentQuestionIndex(0);
-    setSelectedOption(newAnswers[0]);
+    setSelectedOption(newAnswers[0] || "");
     setShowExplanation(false);
     setShowScorePopup(true);
     setTimerActive(false);
 
     setScoreDetails({
-      totalQuestions,
+      totalQuestions: questions.length,
       attempted,
-      correct: correctCount,
-      wrong: wrongCount,
+      answeredCorrectly: correctCount,
+      answeredIncorrectly: wrongCount,
       unattempted,
       totalScore: totalScore.toFixed(2),
       percentage: percentage.toFixed(2),
     });
 
-    const seenMcqIds = questions.map(q => q.id);
-    fetch(`${API_URL}/user/mark-mcqs-seen`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, mcqIds: seenMcqIds }),
-    })
-      .then(res => {
-        if (!res.ok) {
-          console.error("Battleground: Failed to mark MCQs as seen:", res.status);
-        } else {
-          console.log("Battleground: MCQs marked as seen for user:", userId);
-        }
-      })
-      .catch(err => console.error("Battleground: Error marking MCQs as seen:", err));
-
-    // Submit score to backend and refresh leaderboard
     fetch(`${API_URL}/battleground/submit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -513,67 +376,77 @@ const Battleground = () => {
         return res.json();
       })
       .then(data => {
-        console.log("Battleground: Score submitted, leaderboard updated:", data.rankings);
         setLeaderboard(data.rankings || []);
+        console.log("Battleground: Test submitted, leaderboard updated", data.rankings?.length || 0);
       })
       .catch(error => {
-        console.error("Battleground: Failed to submit score:", error.message);
+        console.error("Error submitting test:", error);
       });
   };
 
-  const resetTest = () => {
+  const resetTest = (questionCount) => {
+    console.log("Battleground: Resetting test with", questionCount, "questions");
     setTestStarted(false);
-    setShowInstructionsPopup(true);
-    setQuestions([]);
-    setUserAnswers([]);
-    setQuestionStatuses([]);
+    setQuestions([...mcqs]);
+    setUserAnswers(new Array(mcqs.length).fill(null));
+    setQuestionStatuses(new Array(mcqs.length).fill("unattempted"));
     setCurrentQuestionIndex(0);
     setScore(null);
-    setSelectedOption(null);
+    setSelectedOption("");
     setShowExplanation(false);
     setShowScorePopup(false);
     setShowLeaderboardPopup(false);
-    setIsScoreMinimized(false);
+    setIsScoreMinimized(true);
     setFilter("all");
-    setShowModeSidebar(false);
+    setShowSidebar(false);
     setMaxQuestionReached(0);
     setScoreDetails({
       totalQuestions: 0,
       attempted: 0,
-      correct: 0,
-      wrong: 0,
+      answeredCorrectly: 0,
+      answeredIncorrectly: 0,
       unattempted: 0,
       totalScore: 0,
       percentage: 0,
     });
-    setLoading(true);
-    setLoadingMessage("Loading MCQs...");
-    setTimeLeft(60 * 60);
-    setTimerActive(false);
-    fetchUserMCQs();
-    console.log("Battleground: State reset: Test reset");
+    setLoading(false);
+    setTimeLeft(questionCount === 25 ? 12 * 60 : questionCount === 50 ? 30 * 60 : questionCount === 100 ? 60 * 60 : 10 * 60);
+    setTimerActive(true);
+    setTotalQuestions(questionCount);
+    setTestStarted(true);
   };
 
   const handleFilterChange = (newFilter) => {
-    console.log("Battleground: handleFilterChange - New filter:", newFilter);
-    const filteredIndices = Array.from({ length: totalQuestions })
-      .map((_, i) => i)
-      .filter(i => filter === "all" || questionStatuses[i] === newFilter);
-
-    console.log(`Battleground: Filtered indices for ${newFilter}:`, filteredIndices);
     setFilter(newFilter);
     if (newFilter === "wrong") {
       const firstWrongIndex = questionStatuses.findIndex(status => status === "wrong");
-      console.log("Battleground: First wrong index:", firstWrongIndex);
       if (firstWrongIndex !== -1) {
         setCurrentQuestionIndex(firstWrongIndex);
-        setSelectedOption(userAnswers[firstWrongIndex]);
+        setSelectedOption(userAnswers[firstWrongIndex] || "");
         setShowExplanation(false);
       }
     }
   };
 
-  // Question rendering functions (same as Laxmikanth.js)
+  const handleQuestionCountSelect = (count) => {
+    const parsedCount = parseInt(count, 10);
+    if (parsedCount && [25, 50, 100].includes(parsedCount)) {
+      console.log("Battleground: Selected question count", parsedCount);
+      if (cachedMcqs.length >= 3) {
+        setMcqs(cachedMcqs.slice(0, 3));
+        setCachedMcqs(cachedMcqs.slice(3));
+        resetTest(parsedCount);
+        fetchNewInitialMCQs(); // Replenish cache in background
+      } else if (isMcqsFetching) {
+        console.log("Battleground: Waiting for MCQs to load for question count", parsedCount);
+        setLoading(true);
+        setLoadingMessage("Loading MCQs...");
+      } else {
+        setError("Failed to load MCQs. Please try again.");
+      }
+    }
+  };
+
   const isTableBasedQuestion = (questionLines) => {
     return (
       questionLines &&
@@ -628,7 +501,6 @@ const Battleground = () => {
 
   const renderQuestion = (questionLines, mcq) => {
     if (!questionLines || !Array.isArray(questionLines) || !mcq) {
-      console.error("Battleground: renderQuestion - Invalid questionLines or mcq", { questionLines, mcq });
       return <p className="text-red-200">Error: Question content missing</p>;
     }
 
@@ -671,7 +543,6 @@ const Battleground = () => {
       const assertionLine = questionLines.find((line) => line.startsWith("Assertion (A):"));
       const reasonLine = questionLines.find((line) => line.startsWith("Reason (R):"));
       if (!assertionLine || !reasonLine) {
-        console.error("Battleground: renderQuestion - Assertion-Reason structure incomplete", questionLines);
         return <p className="text-red-200">Error: Incomplete Assertion-Reason question</p>;
       }
       return (
@@ -707,7 +578,6 @@ const Battleground = () => {
       const closingLine = closingLineIndex < questionLines.length ? questionLines[closingLineIndex] : "Select the correct order:";
 
       if (items.length !== 4) {
-        console.error("Battleground: renderQuestion - Chronological order question does not have exactly 4 items", items);
         return <p className="text-red-200">Error: Incomplete chronological order question</p>;
       }
 
@@ -726,14 +596,12 @@ const Battleground = () => {
       const introLine = questionLines[0];
       const closingLineIndex = questionLines.findIndex(line => line.includes("Which of the pairs are correctly matched?"));
       if (closingLineIndex === -1) {
-        console.error("Battleground: renderQuestion - Correctly matched pairs question missing closing line", questionLines);
         return <p className="text-red-200">Error: Incomplete correctly matched pairs question</p>;
       }
       const pairs = questionLines.slice(1, closingLineIndex);
       const closingLine = questionLines[closingLineIndex];
 
       if (pairs.length < 3) {
-        console.error("Battleground: renderQuestion - Correctly matched pairs question does not have enough pairs", pairs);
         return <p className="text-red-200">Error: Incomplete correctly matched pairs question</p>;
       }
 
@@ -751,14 +619,13 @@ const Battleground = () => {
     if (isDirectQuestion(questionLines)) {
       return (
         <div className="mb-2">
-          {questionLines.map((line, index) => (
-            <p key={index} className="mb-1 text-ivory">{line}</p>
-          ))}
-        </div>
+        {questionLines.map((line, index) => (
+          <p key={index} className="mb-1 text-ivory">{line}</p>
+        ))}
+      </div>
       );
     }
 
-    console.error("Battleground: renderQuestion - Unknown MCQ structure:", questionLines);
     return (
       <div className="mb-2">
         {questionLines.map((line, index) => (
@@ -768,98 +635,70 @@ const Battleground = () => {
     );
   };
 
-  // Calculate lastActiveIndex for sidebar coloring
-  const lastAttemptedIndex = userAnswers.slice().reverse().findIndex(ans => ans !== null);
+  const lastAttemptedIndex = userAnswers.slice().reverse().findIndex(ans => ans);
   const lastActiveIndex = lastAttemptedIndex === -1 ? -1 : userAnswers.length - 1 - lastAttemptedIndex;
 
   return (
     <div className="min-h-screen bg-gray-900 text-white font-poppins overflow-hidden overscroll-none">
-      {/* Navigation Bar with Timer */}
-      <nav className="fixed top-0 left-0 w-full bg-[#1F2526]/80 backdrop-blur-md p-3 flex justify-between items-center shadow-lg z-50 h-16">
-        <div className="flex items-center gap-0.5 max-w-[40%]">
-          <button
-            onClick={handleGoBack}
-            className="text-zinc-300 hover:text-blue-400 transition-colors duration-300"
+      <div className="fixed top-0 left-0 w-full h-12 flex justify-between items-center z-50">
+        <style>
+          {`
+            .glass-button {
+              background: transparent;
+              border: none;
+              border-radius: 8px;
+              transition: all 0.3s ease;
+              padding: 8px;
+              box-shadow: none;
+            }
+            .glass-button:hover {
+              transform: scale(1.08);
+              background: rgba(59, 130, 246, 0.08);
+              box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+            }
+            .glass-timer {
+              background: rgba(31, 37, 47, 0.6);
+              backdrop-filter: blur(10px);
+              border-radius: 8px;
+              padding: 4px 12px;
+              transition: all 0.3s ease;
+            }
+          `}
+        </style>
+        <button
+          onClick={handleGoBack}
+          className="glass-button absolute left-4 flex items-center justify-center"
+          style={{ background: "transparent", boxShadow: "none", padding: 0 }}
+          aria-label="Go Back"
+        >
+          <svg
+            className="w-8 h-8 text-white opacity-80 hover:opacity-100"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            viewBox="0 0 24 24"
           >
-            <svg
-              className="w-6 h-6"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+        <div className="glass-timer text-sm sm:text-base font-semibold text-white absolute left-1/2 transform -translate-x-1/2">
+          {testStarted && `Time Left: ${formatTime(timeLeft)}`}
+        </div>
+        <button
+          onClick={toggleSidebar}
+          className="glass-button absolute right-4 flex items-center justify-center"
+          aria-label="Sidebar"
+        >
+          <span className="block">
+            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+              <rect y="6" width="28" height="2.5" rx="1.25" fill="#fff" />
+              <rect y="13" width="28" height="2.5" rx="1.25" fill="#fff" />
+              <rect y="20" width="28" height="2.5" rx="1.25" fill="#fff" />
             </svg>
-          </button>
-          <h1 className="text-lg sm:text-xl md:text-3xl font-extrabold tracking-tight text-blue-400">
-            TrainWithMe
-          </h1>
-        </div>
-        <div className="flex items-center justify-center flex-1">
-          {testStarted && (
-            <div className="text-sm sm:text-base font-semibold text-white">
-              Time Left: {formatTime(timeLeft)}
-            </div>
-          )}
-        </div>
-        <div className="flex items-center justify-end gap-1">
-          {testStarted && (
-            <button
-              onClick={() => setShowModeSidebar(!showModeSidebar)}
-              className="bg-blue-600 text-white p-1 rounded-md hover:bg-blue-700 transition-transform transform hover:scale-105 duration-300"
-            >
-              <svg
-                className={`w-6 h-6 transform ${showModeSidebar ? "rotate-180" : ""}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
-              </svg>
-            </button>
-          )}
-        </div>
-      </nav>
+          </span>
+        </button>
+      </div>
 
-      {/* Instructions Popup */}
-      {showInstructionsPopup && (
-        <div className="fixed top-16 left-0 right-0 bottom-0 z-[1000] flex items-center justify-center bg-black/50">
-          <div className="bg-gray-800 p-6 rounded-lg shadow-2xl max-w-md w-full">
-            <h2 className="text-2xl sm:text-3xl font-bold text-blue-400 mb-6 drop-shadow-lg">Prelims Battleground Instructions</h2>
-            <div className="text-white space-y-2 mb-6">
-              <p>The test consists of <span className="font-bold">{totalQuestions} questions</span>.</p>
-              <p>Time duration: <span className="font-bold">60 minutes</span>.</p>
-              <p>Each correct answer carries <span className="font-bold">2 marks</span>.</p>
-              <p>Each wrong answer deducts <span className="font-bold">0.66 marks</span>.</p>
-              <p>Total marks: <span className="font-bold">{totalQuestions * 2}</span>.</p>
-              <p>Questions will be from all subjects except CSAT.</p>
-            </div>
-            <div className="flex justify-between gap-4">
-              <button
-                onClick={startBattleground}
-                disabled={isAgreeButtonDisabled}
-                className={`w-full bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white px-4 py-2 rounded-lg shadow-xl hover:from-blue-700 hover:via-indigo-700 hover:to-purple-700 transition-all duration-500 transform hover:scale-105 text-base sm:text-lg font-bold ${
-                  isAgreeButtonDisabled ? "opacity-50 cursor-not-allowed" : ""
-                }`}
-              >
-                I Agree
-              </button>
-              <button
-                onClick={() => {
-                  console.log("Battleground: Cancel clicked - Navigating back to /upsc-prelims");
-                  navigate("/upsc-prelims");
-                }}
-                className="w-full bg-gray-600 text-gray-50 px-4 py-2 rounded-lg shadow-lg hover:bg-gray-700 transition-all duration-300 transform hover:scale-105 text-base sm:text-lg font-bold"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Loading Spinner */}
       {loading && (
         <div className="fixed top-16 left-0 right-0 bottom-0 z-[1000] flex items-center justify-center bg-gray-900">
           <div className="flex flex-col items-center">
@@ -871,22 +710,27 @@ const Battleground = () => {
         </div>
       )}
 
-      {/* Main Content */}
-      {testStarted && !loading && (
+      {error && (
+        <div className="fixed top-16 left-0 right-0 bottom-0 z-[999] flex items-center justify-center bg-gray-900">
+          <div className="p-4 bg-red-950 border border-red-700 rounded-lg mx-auto max-w-2xl text-center">
+            <p className="text-base sm:text-lg text-red-200">{error}</p>
+            <button
+              onClick={() => {
+                setError(null);
+                fetchNewInitialMCQs();
+              }}
+              className="mt-4 bg-purple-600 text-gray-50 px-4 py-2 rounded-full shadow-lg hover:bg-purple-700 transition-transform transform hover:scale-105 duration-300"
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
+      )}
+
+      {testStarted && !loading && !error && (
         <div className="pt-16 pb-10 px-4 sm:px-6 lg:px-8 w-full overflow-hidden">
-          {error ? (
-            <div className="p-4 bg-red-950 border border-red-700 rounded-lg mx-auto max-w-2xl">
-              <p className="text-base sm:text-lg text-red-200">{error}</p>
-              <button
-                onClick={resetTest}
-                className="mt-4 bg-purple-600 text-gray-50 px-4 py-2 rounded-full shadow-lg hover:bg-purple-700 transition-transform transform hover:scale-105 duration-300"
-              >
-                Try Again
-              </button>
-            </div>
-          ) : questions.length > 0 && currentQuestionIndex < questions.length ? ( // Updated condition
+          {questions.length > 0 && currentQuestionIndex < questions.length ? (
             <>
-              {/* Horizontal Strip for Filtered Questions */}
               {filter !== "all" && (
                 <div
                   className="fixed top-[4rem] left-0 w-full bg-gray-800 z-40 p-2 overflow-x-auto overflow-y-hidden flex space-x-2 items-center border-2 border-red-500"
@@ -924,9 +768,11 @@ const Battleground = () => {
                           key={actualIndex}
                           className={`flex-shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-full ${colorClass} flex items-center justify-center text-gray-900 text-sm sm:text-base font-semibold shadow-md transition-colors duration-300 cursor-pointer`}
                           onClick={() => {
-                            setCurrentQuestionIndex(actualIndex);
-                            setSelectedOption(userAnswers[actualIndex]);
-                            setShowExplanation(false);
+                            if (actualIndex < questions.length) {
+                              setCurrentQuestionIndex(actualIndex);
+                              setSelectedOption(userAnswers[actualIndex] || "");
+                              setShowExplanation(false);
+                            }
                           }}
                         >
                           {actualIndex + 1}
@@ -937,7 +783,6 @@ const Battleground = () => {
                 </div>
               )}
 
-              {/* Question Box */}
               <div 
                 className="fixed left-0 w-full z-60 px-3 sm:px-4 lg:px-6 question-box bg-gray-900"
                 style={{
@@ -956,7 +801,6 @@ const Battleground = () => {
                 </div>
               </div>
 
-              {/* Options Box */}
               <div 
                 className="absolute left-0 w-full bg-gray-900 z-20 px-2 sm:px-8 lg:px-6"
                 style={{
@@ -1011,7 +855,7 @@ const Battleground = () => {
                     className="absolute top-0 left-0 right-0 bottom-0 rounded-lg z-70 pointer-events-auto"
                     onClick={() => setShowExplanation(false)}
                   >
-                    <div className="absolute top-0 left-0 right-0 bg-black/80 p-2 sm:p-3 rounded-lg flex flex-col h-full">
+                    <div className="absolute top-0 left-0 right-0 bg-black/80 backdrop-blur-md p-2 sm:p-3 rounded-lg flex flex-col h-full">
                       <p className="text-base sm:text-lg font-medium text-zinc-200 mb-2">Explanation:</p>
                       <div className="flex-1 overflow-y-auto">
                         <p className="text-[16px] sm:text-xl text-zinc-200 leading-relaxed">
@@ -1023,101 +867,126 @@ const Battleground = () => {
                 )}
               </div>
 
-              {/* Bottom Navigation Bar */}
-              <div className="fixed bottom-0 left-0 w-full bg-[#1F2526]/80 backdrop-blur-md p-4 flex justify-between items-center shadow-lg z-50">
-                <button
-                  onClick={handlePreviousQuestion}
-                  disabled={currentQuestionIndex === 0}
-                  className={`px-4 py-2 sm:px-6 sm:py-3 text-sm sm:text-base rounded-full shadow-lg transition-transform transform hover:scale-105 duration-300 ${
-                    currentQuestionIndex === 0
-                      ? "bg-gray-600 text-gray-400 cursor-not-allowed"
-                      : "bg-purple-600 text-gray-50 hover:bg-purple-700"
-                  } focus:outline-none focus:ring-2 focus:ring-blue-400`}
-                >
-                  Previous
-                </button>
+              <button
+                onClick={handlePreviousQuestion}
+                disabled={currentQuestionIndex === 0}
+                className={`fixed bottom-2.5 left-2 px-6 py-1.5 text-sm sm:text-base rounded-full shadow-xl transition-transform transform hover:scale-105 duration-300 z-50 ${
+                  currentQuestionIndex === 0
+                    ? "bg-gray-400 text-gray-200 cursor-not-allowed border border-gray-300"
+                    : "bg-red-700 text-white hover:bg-red-800 border border-red-700"
+                } focus:outline-none focus:ring-2 focus:ring-blue-400`}
+                style={{ boxShadow: "0 2px 16px rgba(0,0,0,0.18)" }}
+              >
+                Previous
+              </button>
+              <button
+                onClick={handleNextQuestion}
+                disabled={currentQuestionIndex >= totalQuestions - 1 || score !== null || currentQuestionIndex >= questions.length - 1}
+                className={`fixed bottom-2.5 right-2 px-6 py-1.5 text-sm sm:text-base rounded-full shadow-xl transition-transform transform hover:scale-105 duration-300 border border-white/10 z-50 ${
+                  currentQuestionIndex >= totalQuestions - 1 || score !== null || currentQuestionIndex >= questions.length - 1
+                    ? "bg-gray-300 text-gray-400 cursor-not-allowed"
+                    : "bg-white text-black hover:bg-gray-100"
+                } focus:outline-none focus:ring-2 focus:ring-blue-400`}
+                style={{ boxShadow: "0 2px 16px rgba(0,0,0,0.18)" }}
+              >
+                Next
+              </button>
+              <div className="fixed bottom-2.5 left-1/2 transform -translate-x-1/2 z-50 flex gap-4 pointer-events-auto">
                 {score !== null && (
                   <button
                     onClick={() => {
                       setShowScorePopup(true);
                       setIsScoreMinimized(false);
                     }}
-                    className="px-4 py-2 sm:px-6 sm:py-3 text-sm sm:text-base rounded-full shadow-lg transition-transform transform hover:scale-105 duration-300 bg-blue-600 text-gray-50 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    className="px-6 py-1.5 text-sm sm:text-base rounded-full shadow-xl transition-transform transform hover:scale-105 duration-300 bg-black/40 backdrop-blur-md border border-white/10 text-white hover:bg-black/60 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    style={{ boxShadow: "0 2px 16px rgba(0,0,0,0.18)" }}
                   >
                     Score
                   </button>
                 )}
-                {currentQuestionIndex === totalQuestions - 1 ? (
+                {currentQuestionIndex === totalQuestions - 1 && score === null && (
                   <button
                     onClick={submitTest}
-                    className="px-4 py-2 sm:px-6 sm:py-3 text-sm sm:text-base rounded-full shadow-lg transition-transform transform hover:scale-105 duration-300 bg-emerald-500 text-gray-50 hover:bg-emerald-600 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    className="px-6 py-1.5 text-sm sm:text-base rounded-full shadow-xl transition-transform transform hover:scale-105 duration-300 bg-black/40 backdrop-blur-md border border-white/10 text-white hover:bg-black/60 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    style={{ boxShadow: "0 2px 16px rgba(0,0,0,0.18)" }}
                   >
                     Submit Test
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleNextQuestion}
-                    disabled={currentQuestionIndex >= totalQuestions - 1 || score !== null}
-                    className={`px-4 py-2 sm:px-6 sm:py-3 text-sm sm:text-base rounded-full shadow-lg transition-transform transform hover:scale-105 duration-300 ${
-                      currentQuestionIndex >= totalQuestions - 1 || score !== null
-                        ? "bg-gray-600 text-gray-400 cursor-not-allowed"
-                        : "bg-white text-black hover:bg-gray-200"
-                    } focus:outline-none focus:ring-2 focus:ring-blue-400`}
-                  >
-                    Next
                   </button>
                 )}
               </div>
             </>
           ) : testStarted && questions.length > 0 ? (
-            <div className="p-4 bg-red-950 border border-red-700 rounded-lg mx-auto max-w-2xl">
-              <p className="text-base sm:text-lg text-red-200">
-                Error: Invalid question index. Please reset the test.
-              </p>
+            <div className="p-4 bg-red-600 border border-gray-700 rounded-lg mx-auto max-w-sm sm:max-w-md text-center">
+              <p className="text-sm sm:text-base text-white font-semibold">Error: Invalid question index. Please try again.</p>
               <button
-                onClick={resetTest}
-                className="mt-4 bg-purple-600 text-gray-50 px-4 py-2 rounded-full shadow-lg hover:bg-purple-700 transition-transform transform hover:scale-105 duration-300"
+                onClick={() => resetTest(totalQuestions)}
+                className="mt-4 bg-blue-600 text-white px-4 py-1.5 text-sm sm:text-base rounded-full shadow-lg hover:bg-blue-700 transition-transform transform duration-300"
               >
                 Reset Test
               </button>
             </div>
-          ) : null}
+          ) : (
+            <div className="p-4 bg-gray-800 border border-gray-700 rounded-lg mx-auto max-w-sm sm:max-w-md text-center">
+              <p className="text-sm sm:text-base text-gray-200 font-semibold">No questions loaded yet. Please try again.</p>
+              <button
+                onClick={() => {
+                  setError(null);
+                  fetchNewInitialMCQs();
+                }}
+                className="mt-4 bg-blue-600 text-white px-4 py-1.5 text-sm sm:text-base rounded-full shadow-lg hover:bg-blue-700 transition-transform transform duration-300"
+              >
+                Retry
+              </button>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Score Popup */}
+      {!testStarted && !loading && !error && (
+        <div className="fixed top-16 left-0 right-0 bottom-0 z-[999] flex items-center justify-center bg-gray-900">
+          <div className="p-4 bg-gray-800 border border-gray-700 rounded-lg mx-auto max-w-sm sm:max-w-md text-center">
+            <p className="text-sm sm:text-base text-gray-200 font-semibold">Loading test... Please wait.</p>
+            <button
+              onClick={() => resetTest(totalQuestions)}
+              className="mt-4 bg-blue-600 text-white px-4 py-1.5 text-sm sm:text-base rounded-full shadow-lg hover:bg-blue-700 transition-transform transform duration-300"
+            >
+              Start Test
+            </button>
+          </div>
+        </div>
+      )}
+
       {showScorePopup && (
-        <div className="fixed top-16 left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-gray-800 p-6 rounded-lg shadow-lg max-w-md w-full">
-            <h2 className="text-xl sm:text-2xl font-bold text-blue-400 mb-4">Test Results</h2>
-            <div className="text-white space-y-2">
-              <p>Total Number of Questions: {scoreDetails.totalQuestions}</p>
-              <p>Number of Questions Attempted: {scoreDetails.attempted}</p>
-              <p>Number of Correct Answers: {scoreDetails.correct}</p>
-              <p>Number of Wrong Answers: {scoreDetails.wrong}</p>
-              <p>Number of Unattempted Questions: {scoreDetails.unattempted}</p>
-              <p>Total Score: {scoreDetails.totalScore} / {totalQuestions * 2}</p>
+        <div className="fixed top-16 left-0 right-0 bottom-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-gray-800 p-4 sm:p-6 rounded-lg shadow-lg max-w-sm sm:max-w-md w-full mx-4">
+            <h2 className="text-lg sm:text-xl font-bold text-blue-400 mb-4">Test Results</h2>
+            <div className="text-white text-sm sm:text-base space-y-2">
+              <p>Total Questions: {scoreDetails.totalQuestions}</p>
+              <p>Attempted: {scoreDetails.attempted}</p>
+              <p>Correct: {scoreDetails.answeredCorrectly}</p>
+              <p>Wrong: {scoreDetails.answeredIncorrectly}</p>
+              <p>Unattempted: {scoreDetails.unattempted}</p>
+              <p>Total Score: {scoreDetails.totalScore} / {scoreDetails.totalQuestions * 2}</p>
               <p>Percentage: {scoreDetails.percentage}%</p>
               <p className={scoreDetails.percentage >= PRELIMS_CUTOFF ? "text-green-400" : "text-red-400"}>
                 {scoreDetails.percentage >= PRELIMS_CUTOFF
-                  ? `Above prelims cutoff percentage by ${(scoreDetails.percentage - PRELIMS_CUTOFF).toFixed(2)}%`
-                  : `Below prelims cutoff percentage by ${(PRELIMS_CUTOFF - scoreDetails.percentage).toFixed(2)}%`}
+                  ? `Above prelims cutoff by ${(scoreDetails.percentage - PRELIMS_CUTOFF).toFixed(2)}%`
+                  : `Below prelims cutoff by ${(PRELIMS_CUTOFF - scoreDetails.percentage).toFixed(2)}%`}
               </p>
             </div>
-            <div className="flex gap-2 mt-4">
+            <div className="flex flex-col sm:flex-row gap-2 mt-4">
               <button
                 onClick={() => {
                   setShowScorePopup(false);
-                  setShowLeaderboardPopup(false);
                   setIsScoreMinimized(true);
                 }}
-                className="bg-gray-600 text-gray-50 px-4 py-2 rounded-md hover:bg-gray-700 transition-transform transform hover:scale-105 duration-300"
+                className="bg-gray-600 text-white px-4 py-1.5 text-sm sm:text-base rounded-md hover:bg-gray-700 transition-transform transform hover:scale-105 duration-300"
               >
                 Hide
               </button>
               <button
-                onClick={resetTest}
-                className="bg-purple-600 text-gray-50 px-4 py-2 rounded-md hover:bg-purple-700 transition-transform transform hover:scale-105 duration-300"
+                onClick={() => resetTest(totalQuestions)}
+                className="bg-purple-600 text-white px-4 py-1.5 text-sm sm:text-base rounded-md hover:bg-purple-700 transition-transform transform hover:scale-105 duration-300"
               >
                 New Test
               </button>
@@ -1126,7 +995,7 @@ const Battleground = () => {
                   setShowScorePopup(false);
                   setShowLeaderboardPopup(true);
                 }}
-                className="bg-blue-600 text-gray-50 px-4 py-2 rounded-md hover:bg-blue-700 transition-transform transform hover:scale-105 duration-300"
+                className="bg-blue-600 text-white px-4 py-1.5 text-sm sm:text-base rounded-md hover:bg-blue-700 transition-transform transform hover:scale-105 duration-300"
               >
                 Leaderboard
               </button>
@@ -1135,21 +1004,20 @@ const Battleground = () => {
         </div>
       )}
 
-      {/* Leaderboard Popup */}
       {showLeaderboardPopup && (
-        <div className="fixed top-16 left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-gray-800 rounded-lg shadow-md p-4 sm:p-6 lg:p-8 mx-auto max-w-3xl w-full">
-            <h3 className="text-2xl sm:text-3xl font-semibold text-gray-50 mb-4 text-center">
+        <div className="fixed top-16 left-0 right-0 bottom-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-gray-800 rounded-lg shadow-md p-4 sm:p-6 mx-4 max-w-sm sm:max-w-2xl w-full">
+            <h3 className="text-lg sm:text-2xl font-semibold text-gray-50 mb-4 text-center">
               Leaderboard Rankings
             </h3>
             {leaderboard.length > 0 ? (
-              <div className="overflow-y-auto max-h-96">
-                <table className="w-full text-left text-zinc-300">
+              <div className="overflow-y-auto max-h-80 sm:max-h-96">
+                <table className="w-full text-left text-zinc-300 text-sm sm:text-base">
                   <thead>
                     <tr className="border-b border-gray-600">
-                      <th className="px-2 sm:px-4 py-2">Position</th>
-                      <th className="px-2 sm:px-4 py-2">Username</th>
-                      <th className="px-2 sm:px-4 py-2">Score</th>
+                      <th className="px-2 sm:px-4 py-1 sm:py-2">Position</th>
+                      <th className="px-2 sm:px-4 py-1 sm:py-2">Username</th>
+                      <th className="px-2 sm:px-4 py-1 sm:py-2">Score</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1157,9 +1025,9 @@ const Battleground = () => {
                       const position = index === 0 ? "1st" : index === 1 ? "2nd" : index === 2 ? "3rd" : `${index + 1}th`;
                       return (
                         <tr key={index} className="border-b border-gray-700">
-                          <td className="px-2 sm:px-4 py-2">{position}</td>
-                          <td className="px-2 sm:px-4 py-2">{entry.username}</td>
-                          <td className="px-2 sm:px-4 py-2">{entry.score}</td>
+                          <td className="px-2 sm:px-4 py-1 sm:py-2">{position}</td>
+                          <td className="px-2 sm:px-4 py-1 sm:py-2">{entry.username}</td>
+                          <td className="px-2 sm:px-4 py-1 sm:py-2">{entry.score}</td>
                         </tr>
                       );
                     })}
@@ -1167,15 +1035,15 @@ const Battleground = () => {
                 </table>
               </div>
             ) : (
-              <p className="text-zinc-300 text-center">No rankings available yet.</p>
+              <p className="text-zinc-300 text-center text-sm sm:text-base">No rankings available yet.</p>
             )}
-            <div className="flex justify-center mt-6">
+            <div className="flex justify-center mt-4 sm:mt-6">
               <button
                 onClick={() => {
                   setShowLeaderboardPopup(false);
                   setShowScorePopup(true);
                 }}
-                className="bg-gray-600 text-gray-50 px-4 py-2 sm:px-6 sm:py-3 text-sm sm:text-base rounded-full shadow-lg hover:bg-gray-700 transition-transform transform hover:scale-105 duration-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="bg-gray-600 text-white px-4 py-1.5 text-sm sm:text-base rounded-full shadow-lg hover:bg-gray-700 transition-transform transform hover:scale-105 duration-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
               >
                 Back
               </button>
@@ -1184,26 +1052,23 @@ const Battleground = () => {
         </div>
       )}
 
-      {/* Sidebar with Question Circles */}
       {testStarted && (
         <div
-          className="fixed top-16 right-0 h-[calc(100vh-4rem)] w-64 bg-gray-800 shadow-2xl z-[9999] transition-all duration-300 ease-in-out"
-          style={{ right: showModeSidebar ? "0" : "-256px" }}
+          className="fixed top-16 right-0 h-[calc(100vh-4rem)] w-64 sm:w-72 bg-gray-800 shadow-lg z-[9999] transition-all duration-300 ease-in-out"
+          style={{ right: showSidebar ? "0" : "-288px" }}
         >
-          <div className="p-4 h-full flex flex-col relative">
-            {/* Score Button */}
+          <div className="p-4 sm:p-6 h-full flex flex-col relative">
             {isScoreMinimized && (
               <button
                 onClick={() => {
                   setIsScoreMinimized(false);
                   setShowScorePopup(true);
                 }}
-                className="bg-blue-600 text-gray-50 px-3 py-2 rounded-md hover:bg-blue-700 transition-transform transform hover:scale-105 duration-300 text-sm sm:text-base mb-4"
+                className="bg-blue-600 text-white px-3 py-1.5 text-sm sm:text-base rounded-md hover:bg-blue-700 transition-transform duration-300 mb-4"
               >
                 Score
               </button>
             )}
-            {/* Filter Dropdown */}
             <div className="mb-4 z-10">
               <label className="block text-xs sm:text-sm font-semibold text-blue-300 mb-1" htmlFor="sidebar-filter-select">
                 Filter
@@ -1212,18 +1077,17 @@ const Battleground = () => {
                 id="sidebar-filter-select"
                 value={filter}
                 onChange={(e) => handleFilterChange(e.target.value)}
-                className="w-full bg-gray-700 text-white px-3 py-2 rounded-lg text-sm sm:text-base focus:outline-none focus:ring-2 focus:ring-blue-400"
+                className="w-full text-gray-50 bg-gray-700 px-4 py-1.5 text-sm sm:text-base rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 transition-all duration-200"
               >
                 <option value="all">All Questions</option>
-                <option value="correct">Right Questions</option>
-                <option value="wrong">Wrong Questions</option>
-                <option value="unattempted">Unattempted Questions</option>
+                <option value="correct">Correct Answers</option>
+                <option value="wrong">Wrong Answers</option>
+                <option value="unattempted">Unattempted</option>
               </select>
             </div>
 
-            {/* Question Circles and Submit Test Button */}
             <div className="flex-1 overflow-y-auto">
-              <h3 className={`text-base sm:text-lg font-semibold text-white mb-2 p-2 rounded-lg ${filter === "wrong" ? "bg-red-500" : "bg-gray-700"}`}>
+              <h3 className={`text-sm sm:text-base font-semibold text-white mb-2 p-2 rounded-lg ${filter === "wrong" ? "bg-red-500" : "bg-gray-700"}`}>
                 Question Progress
               </h3>
               <div className="grid grid-cols-5 gap-2">
@@ -1237,19 +1101,21 @@ const Battleground = () => {
                       ? "bg-red-500"
                       : "bg-white"
                     : actualIndex <= maxQuestionReached
-                    ? userAnswers[actualIndex] !== null
-                      ? "bg-blue-500"
+                    ? userAnswers[actualIndex]
+                      ? "bg-blue-200"
                       : "bg-white"
-                    : "bg-gray-500";
+                    : "bg-gray-200";
 
                   return (
                     <div
                       key={actualIndex}
-                      className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full ${colorClass} flex items-center justify-center text-gray-900 text-sm sm:text-base font-semibold shadow-md transition-colors duration-300 cursor-pointer`}
+                      className={`w-9 h-9 sm:w-10 sm:h-10 rounded-lg ${colorClass} flex items-center justify-center text-gray-900 text-xs sm:text-sm font-semibold shadow-md transition-transform duration-200 cursor-pointer hover:scale-105`}
                       onClick={() => {
-                        setCurrentQuestionIndex(actualIndex);
-                        setSelectedOption(userAnswers[actualIndex]);
-                        setShowExplanation(false);
+                        if (actualIndex < questions.length) {
+                          setCurrentQuestionIndex(actualIndex);
+                          setSelectedOption(userAnswers[actualIndex] || "");
+                          setShowExplanation(false);
+                        }
                       }}
                     >
                       {actualIndex + 1}
@@ -1257,10 +1123,25 @@ const Battleground = () => {
                   );
                 })}
               </div>
+              <div className="mt-4">
+                <label className="block text-xs sm:text-sm font-semibold text-blue-300 mb-1" htmlFor="question-count-select">
+                  Select Number of Questions
+                </label>
+                <select
+                  id="question-count-select"
+                  onChange={(e) => handleQuestionCountSelect(e.target.value)}
+                  className="w-full text-gray-900 bg-gray-700 px-4 py-1.5 text-sm sm:text-base rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 transition-all duration-200"
+                >
+                  <option value="">Select Option</option>
+                  <option value="25">25 Questions</option>
+                  <option value="50">50 Questions</option>
+                  <option value="100">100 Questions</option>
+                </select>
+              </div>
               {score === null && (
                 <button
                   onClick={submitTest}
-                  className="w-full mt-4 px-4 py-2 sm:px-6 sm:py-3 text-sm sm:text-base rounded-full shadow-lg transition-transform transform hover:scale-105 duration-300 bg-emerald-500 text-gray-50 hover:bg-emerald-600 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  className="w-full mt-4 px-4 py-1.5 text-sm sm:text-base rounded-full shadow-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 transition-transform duration-300 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-400"
                 >
                   Submit Test
                 </button>

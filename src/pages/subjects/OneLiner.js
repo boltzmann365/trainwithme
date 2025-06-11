@@ -1,48 +1,125 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "../../App";
+import { useAuth, useQanda } from "../../App";
+import BottomBar from "./BottomBar";
 import axios from "axios";
 
 const OneLiner = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [qandaPairs, setQandaPairs] = useState([]);
-  const [books, setBooks] = useState(["All"]);
+  const { qandaPairs: prefetchedQandaPairs, setQandaPairs, fetchQanda, isQandaFetching, refreshQanda } = useQanda();
+  const [qandaPairs, setLocalQandaPairs] = useState([]);
+  const [categoryCache, setCategoryCache] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [loadingMessage, setLoadingMessage] = useState("");
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
-  const [selectedBook, setSelectedBook] = useState("All");
-  const [showSidebar, setShowSidebar] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [view, setView] = useState("qanda");
   const scrollContainerRef = useRef(null);
+  const isFetchingRef = useRef(false);
+  const isPrefetchingRef = useRef({}); // Track prefetching per category
+  const isFirstMountRef = useRef(true);
   const API_URL = "https://new-backend-tx3z.onrender.com";
   const ITEMS_PER_PAGE = 10;
 
+  const categories = [
+    "All",
+    "History",
+    "Politics",
+    "Geography",
+    "Economy",
+    "Current Affairs",
+    "Science",
+    "Environment",
+    "Culture",
+  ];
+
+  // Prefetch pairs for all categories except "All" on mount
   useEffect(() => {
     if (!user) {
       navigate("/login", { state: { from: "/oneliners" } });
       return;
     }
-    fetchBooks();
-    fetchQandA(true);
-  }, [user]);
 
-  useEffect(() => {
-    if (selectedBook !== "All") {
-      setQandaPairs([]);
-      setPage(1);
+    if (isFirstMountRef.current) {
+      const prefetchCategories = categories.filter((cat) => cat !== "All");
+      Promise.all(
+        prefetchCategories.map((category) =>
+          fetchQandA(true, category, true).then((pairs) => ({ category, pairs }))
+        )
+      ).then((results) => {
+        const newCache = results.reduce((acc, { category, pairs }) => {
+          acc[category] = pairs;
+          return acc;
+        }, {});
+        setCategoryCache((prev) => ({ ...prev, ...newCache }));
+        console.log("OneLiner: Prefetched pairs for categories:", Object.keys(newCache));
+      }).catch((err) => {
+        console.error("OneLiner: Error prefetching category pairs:", err.message);
+      });
+    }
+
+    if (isQandaFetching) {
+      console.log("OneLiner: Waiting for prefetched Q&A pairs...");
+      setLoading(true);
+      setLoadingMessage("Loading Q&A pairs...");
+    } else if (selectedCategory === "All" && prefetchedQandaPairs.length >= ITEMS_PER_PAGE) {
+      console.log("OneLiner: Using prefetched Q&A pairs:", prefetchedQandaPairs.length);
+      setLocalQandaPairs(prefetchedQandaPairs);
+      setPage(2);
       setHasMore(true);
+      setLoading(false);
+      isFirstMountRef.current = false;
+    } else if (!isQandaFetching && isFirstMountRef.current && prefetchedQandaPairs.length === 0) {
+      console.log("OneLiner: Initial mount, no prefetched pairs, waiting...");
+      setLoading(true);
+      setLoadingMessage("Loading Q&A pairs...");
+    }
+  }, [user, prefetchedQandaPairs, isQandaFetching, navigate, selectedCategory]);
+
+  // Handle category changes
+  useEffect(() => {
+    setLocalQandaPairs([]);
+    setPage(1);
+    setHasMore(true);
+    if (selectedCategory === "All" && prefetchedQandaPairs.length >= ITEMS_PER_PAGE && !isQandaFetching) {
+      console.log("OneLiner: Restoring prefetched Q&A pairs for All category");
+      setLocalQandaPairs(prefetchedQandaPairs);
+      setPage(2);
+      setHasMore(true);
+      setLoading(false);
+    } else if (selectedCategory !== "All" && categoryCache[`${selectedCategory}_next`] && !isQandaFetching) {
+      console.log(`OneLiner: Using prefetched next Q&A pairs for ${selectedCategory}:`, categoryCache[`${selectedCategory}_next`].length);
+      setLocalQandaPairs(categoryCache[`${selectedCategory}_next`]);
+      setCategoryCache((prev) => {
+        const newCache = { ...prev, [selectedCategory]: prev[`${selectedCategory}_next`] };
+        delete newCache[`${selectedCategory}_next`];
+        return newCache;
+      });
+      setPage(2);
+      setHasMore(true);
+      setLoading(false);
+    } else if (selectedCategory !== "All" && categoryCache[selectedCategory] && !isQandaFetching) {
+      console.log(`OneLiner: Using cached Q&A pairs for ${selectedCategory}:`, categoryCache[selectedCategory].length);
+      setLocalQandaPairs(categoryCache[selectedCategory]);
+      setPage(2);
+      setHasMore(true);
+      setLoading(false);
+    } else if (!isQandaFetching) {
+      console.log("OneLiner: Fetching Q&A pairs for category change...");
       fetchQandA(true);
     }
-  }, [selectedBook]);
+  }, [selectedCategory, prefetchedQandaPairs, isQandaFetching, categoryCache]);
 
-  // Infinite scroll on manual scroll
+  // Infinite scrolling
   useEffect(() => {
     const handleScroll = () => {
       if (scrollContainerRef.current) {
         const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
         if (scrollTop + clientHeight >= scrollHeight - 10 && hasMore && !loading) {
-          setPage(prev => prev + 1);
+          setPage((prev) => prev + 1);
           fetchQandA(false);
         }
       }
@@ -53,61 +130,114 @@ const OneLiner = () => {
       container.addEventListener("scroll", handleScroll);
       return () => container.removeEventListener("scroll", handleScroll);
     }
-  }, [qandaPairs, loading, hasMore]);
+  }, [qandaPairs, hasMore, loading]);
 
-  const fetchBooks = async () => {
+  const prefetchNextPairs = async (category) => {
+    if (isPrefetchingRef.current[category]) {
+      console.log(`OneLiner: Skipping prefetch for ${category}, already in progress`);
+      return;
+    }
+    isPrefetchingRef.current[category] = true;
     try {
-      const response = await axios.get(`${API_URL}/user/get-qanda-books`, {
-        params: { userId: user.email.split('@')[0] }
-      });
-      const bookNames = response.data.books || [];
-      setBooks(["All", ...bookNames]);
+      const newPairs = await fetchQandA(true, category, true);
+      setCategoryCache((prev) => ({
+        ...prev,
+        [`${category}_next`]: newPairs,
+      }));
+      console.log(`OneLiner: Prefetched next 10 Q&A pairs for ${category}`);
     } catch (err) {
-      console.error("fetchBooks error:", err.message);
+      console.error(`OneLiner: Error prefetching next pairs for ${category}:`, err.message);
+    } finally {
+      isPrefetchingRef.current[category] = false;
     }
   };
 
-  const fetchQandA = async (reset = false) => {
-    if (!hasMore && !reset) return;
-    setLoading(true);
-    setError(null);
+  const fetchQandA = async (reset = false, category = selectedCategory, isPrefetch = false) => {
+    if (!hasMore && !reset && !isPrefetch) return;
+    if (loading && !isPrefetch) return;
+    if (isFetchingRef.current && !isPrefetch) return;
+
+    if (!isPrefetch) {
+      isFetchingRef.current = true;
+      setLoading(true);
+      setError(null);
+    }
+
     try {
-      const response = await axios.get(`${API_URL}/user/get-qanda`, {
-        params: {
-          userId: user.email.split('@')[0],
-          bookName: selectedBook === "All" ? undefined : selectedBook,
-          page: reset ? 1 : page,
-          limit: ITEMS_PER_PAGE
-        }
-      });
+      const categoryParam = category === "All" ? undefined : category;
+      const params = {
+        userId: user.email.split("@")[0],
+        category: categoryParam,
+        page: reset ? 1 : page,
+        limit: ITEMS_PER_PAGE,
+      };
+      console.log("Sending API request with params:", params);
+      const response = await axios.get(`${API_URL}/user/get-qanda`, { params });
       const newPairs = response.data.qanda || [];
-      setQandaPairs(prev => reset ? newPairs : [...prev, ...newPairs]);
+      console.log(
+        `Fetched Q&A for category "${category}":`,
+        newPairs.map((pair) => ({
+          question: pair.question,
+          category: pair.category,
+        }))
+      );
+
+      if (isPrefetch) {
+        return newPairs;
+      }
+
+      const updatedPairs = reset ? newPairs : [...qandaPairs, ...newPairs];
+      setLocalQandaPairs(updatedPairs);
+      if (category === "All") {
+        setQandaPairs(updatedPairs);
+      } else {
+        setCategoryCache((prev) => ({ ...prev, [category]: updatedPairs }));
+      }
+
       setHasMore(newPairs.length === ITEMS_PER_PAGE);
       if (reset) setPage(2);
     } catch (err) {
-      const errorMsg = err.response?.status === 404 ? "No more Q and A pairs available." : err.response?.data?.error || "Failed to load Q and A pairs.";
-      setError(errorMsg);
-      setHasMore(false);
-      console.error("fetchQandA error:", err.message);
+      const errorMsg =
+        err.response?.status === 404
+          ? `No Q and A pairs available for ${category === "All" ? "any category" : category}.`
+          : err.response?.data?.error || "Failed to load Q and A pairs.";
+      if (!isPrefetch) {
+        setError(errorMsg);
+        setHasMore(false);
+        console.error("fetchQandA error:", err.message);
+      }
+      if (isPrefetch) {
+        return [];
+      }
     } finally {
-      setLoading(false);
+      if (!isPrefetch) {
+        setLoading(false);
+        isFetchingRef.current = false;
+        isFirstMountRef.current = false;
+      }
     }
   };
 
-  const handleBookChange = (book) => {
-    setSelectedBook(book);
-    setQandaPairs([]);
-    setPage(1);
-    setHasMore(true);
-    setShowSidebar(false);
-  };
+ const handleCategoryChange = (category) => {
+  if (category !== "All" && selectedCategory !== "All") {
+    const prevCategory = selectedCategory;
 
-  const handleGoBack = () => {
-    navigate("/upsc-prelims");
-  };
+    // 1. Show cached Q&A for the new category if available (handled by useEffect)
+    // 2. Clear cache for previous category
+    setCategoryCache((prev) => {
+      const newCache = { ...prev };
+      delete newCache[prevCategory];
+      return newCache;
+    });
+
+    // 3. Prefetch new Q&A for previous category and store as `${prevCategory}_next`
+    prefetchNextPairs(prevCategory);
+  }
+  setSelectedCategory(category);
+};
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white font-poppins overscroll-none">
+    <div className="h-screen bg-gray-900 text-white font-poppins flex flex-col overflow-hidden">
       <style>
         {`
           @keyframes fadeInUp {
@@ -123,46 +253,105 @@ const OneLiner = () => {
           .qanda-card {
             animation: fadeInUp 0.5s ease-out forwards;
           }
+          .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+          }
+          .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+          }
+          .category-button {
+            background: rgba(31, 37, 47, 0.6);
+            backdrop-filter: blur(10px);
+            border: none;
+            border-radius: 12px;
+            padding: 8px 16px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: #d1d5db;
+            transition: all 0.3s ease;
+            min-width: 100px;
+            text-align: center;
+            white-space: nowrap;
+          }
+          .category-button:hover {
+            transform: scale(1.05);
+            background: rgba(59, 130, 246, 0.3);
+            color: #ffffff;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+          }
+          .category-button.active {
+            background: rgba(59, 130, 246, 0.6);
+            color: #ffffff;
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
+          }
+          .filter-container {
+            position: sticky;
+            top: 0;
+            display: flex;
+            flex-wrap: nowrap;
+            gap: 8px;
+            overflow-x: auto;
+            padding: 16px 0;
+            z-index: 10;
+            background: transparent;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+          }
+          .filter-container::-webkit-scrollbar {
+            display: none;
+          }
+          @media (min-width: 640px) {
+            .filter-container {
+              flex-wrap: wrap;
+              overflow-x: visible;
+              justify-content: space-between;
+            }
+            .category-button {
+              flex: 1;
+              min-width: 0;
+              text-overflow: ellipsis;
+            }
+          }
         `}
       </style>
-      <nav className="fixed top-0 left-0 w-full bg-[#1F2526]/80 backdrop-blur-md p-3 flex justify-between items-center shadow-lg z-50 h-16">
-        <div className="flex items-center gap-0.5 max-w-[40%]">
-          <button onClick={handleGoBack} className="text-gray-300 hover:text-blue-400 transition-colors duration-300">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <h1 className="text-lg sm:text-xl md:text-3xl font-extrabold tracking-tight text-blue-400">Q & A World</h1>
-        </div>
-        <button onClick={() => setShowSidebar(true)} className="text-gray-300 hover:text-blue-400 transition-colors duration-300">
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-        </button>
-      </nav>
 
-      <div className="pt-16 pb-20 px-4 sm:px-6 lg:px-8 w-full overflow-hidden">
-        {error && (
-          <div className="p-4 bg-red-950 border border-red-700 rounded-lg mx-auto max-w-2xl">
-            <p className="text-base sm:text-lg text-red-200">{error}</p>
-          </div>
-        )}
+      <div className="flex-1 pb-16 px-4 sm:px-6 lg:px-8 w-full overflow-hidden">
         <div
           ref={scrollContainerRef}
-          className="h-[calc(100vh-8rem)] overflow-y-auto scrollbar-hide"
+          className="h-full overflow-y-auto scrollbar-hide"
           style={{ scrollBehavior: "smooth" }}
         >
+          <div className="filter-container">
+            {categories.map((category) => (
+              <button
+                key={category}
+                onClick={() => handleCategoryChange(category)}
+                className={`category-button ${selectedCategory === category ? "active" : ""}`}
+              >
+                {category}
+              </button>
+            ))}
+          </div>
+
+          {error && (
+            <div className="p-4 bg-red-950 border border-red-700 rounded-lg w-full mb-6 mt-4">
+              <p className="text-base sm:text-lg text-red-200">{error}</p>
+            </div>
+          )}
           {qandaPairs.length === 0 && !loading && !error ? (
-            <p className="text-gray-400 text-center mt-20">No Q and A pairs available for {selectedBook}.</p>
+            <p className="text-gray-400 text-center mt-4">
+              No Q and A pairs available for {selectedCategory === "All" ? "any category" : selectedCategory}.
+            </p>
           ) : (
             qandaPairs.map((pair, index) => (
               <div
                 key={index}
-                className="qanda-card bg-gradient-to-br from-blue-600 to-indigo-700 p-6 rounded-xl shadow-lg hover:shadow-xl shadow-blue-500/50 border border-blue-400/30 mb-6 mx-auto max-w-2xl transition-all duration-300 hover:scale-105"
+                className="qanda-card bg-gradient-to-br from-gray-800 to-gray-700 p-6 rounded-xl shadow-lg hover:shadow-xl shadow-gray-600/50 border border-gray-600/30 mb-6 w-full transition-all duration-300 mt-4"
               >
                 <p className="text-lg sm:text-xl font-bold text-white mb-3">{pair.question}</p>
-                <p className="text-base text-gray-100 leading-relaxed">{pair.answer}</p>
-                <p className="text-sm text-blue-200 mt-3 italic">Book: {pair.bookName}</p>
+                <p className="text-base text-gray-200 leading-relaxed">{pair.answer}</p>
+                <p className="text-sm text-gray-400 mt-3 italic">Subject: {pair.category}</p>
               </div>
             ))
           )}
@@ -174,32 +363,7 @@ const OneLiner = () => {
         </div>
       </div>
 
-      <div
-        className="fixed top-16 right-0 h-[calc(100vh-4rem)] w-64 bg-gray-800 shadow-2xl z-50 transition-transform duration-300 ease-in-out"
-        style={{ transform: showSidebar ? 'translateX(0)' : 'translateX(256px)' }}
-      >
-        <div className="p-4 h-full flex flex-col">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-semibold text-blue-400">Choose Book</h2>
-            <button onClick={() => setShowSidebar(false)} className="text-gray-400 hover:text-white text-xl font-bold">
-              ×
-            </button>
-          </div>
-          <div className="flex flex-col gap-2 overflow-y-auto">
-            {books.map((book) => (
-              <button
-                key={book}
-                onClick={() => handleBookChange(book)}
-                className={`px-3 py-2 rounded-lg text-base font-semibold transition-all duration-300 transform hover:scale-105 ${
-                  selectedBook === book ? "bg-blue-600 text-white shadow-lg" : "bg-gray-600 text-gray-300"
-                }`}
-              >
-                {book}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
+      <BottomBar view={view} setView={setView} />
     </div>
   );
 };

@@ -1,6 +1,7 @@
-import React, { createContext, useState, useContext, useEffect } from "react";
+import React, { createContext, useState, useContext, useEffect, useRef } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { GoogleOAuthProvider, GoogleLogin } from "@react-oauth/google";
+import axios from "axios";
 import UPSCPrelims from "./pages/UPSCPrelims";
 import Polity from "./pages/subjects/Polity";
 import CSAT from "./pages/subjects/CSAT";
@@ -24,13 +25,267 @@ import DishaCSAT from "./pages/subjects/DishaCSAT";
 import VisionIasDec2024 from "./pages/subjects/VisionIasDec2024";
 import DishaIasPreviousYearPaper from "./pages/subjects/DishaIasPreviousYearPaper";
 import DishaIasScience from "./pages/subjects/DishaIasScience";
-import Battleground from "./pages/subjects/Battleground";
-import NewsCard from "./pages/subjects/NewsCard";
 import OneLiner from "./pages/subjects/OneLiner";
+import Profile from "./pages/subjects/Profile";
+import Battleground from "./pages/subjects/Battleground";
 
 const AuthContext = createContext();
+const QandaContext = createContext();
 
 export const useAuth = () => useContext(AuthContext);
+export const useQanda = () => useContext(QandaContext);
+
+export const ProfileDropdown = () => {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const [showProfile, setShowProfile] = useState(false);
+
+  if (!user) return null;
+
+  const handleLogout = () => {
+    logout();
+    setShowProfile(false);
+  };
+
+  return (
+    <div className="relative">
+      <div
+        className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center cursor-pointer"
+        onClick={() => setShowProfile(!showProfile)}
+      >
+        <span className="text-xl">{user.username ? user.username[0].toUpperCase() : user.email[0].toUpperCase()}</span>
+      </div>
+      {showProfile && (
+        <div className="absolute top-12 right-0 bg-gray-800 p-4 rounded-lg shadow-lg z-100">
+          <p>Email: {user.email}</p>
+          <p>Username: {user.username || "Not set"}</p>
+          <button
+            onClick={handleLogout}
+            className="mt-2 text-blue-400 hover:text-blue-500 transition-colors duration-300"
+          >
+            Logout
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ProtectedRoute = ({ children }) => {
+  const { user } = useAuth();
+  const location = useLocation();
+  return user ? children : <Navigate to="/login" state={{ from: location.pathname }} />;
+};
+
+const QandaProvider = ({ children }) => {
+  const [qandaPairs, setQandaPairs] = useState([]);
+  const [mcqs, setMcqs] = useState([]);
+  const [cachedMcqs, setCachedMcqs] = useState([]);
+  const [isMcqsFetching, setIsMcqsFetching] = useState(false);
+  const [isQandaFetching, setIsQandaFetching] = useState(false);
+  const { user } = useAuth();
+  const API_URL = "https://new-backend-tx3z.onrender.com";
+  const ITEMS_PER_PAGE = 10;
+  const isMcqsFetchingRef = useRef(false);
+  const isQandaFetchingRef = useRef(false);
+  const shouldFetchQandaRef = useRef(true);
+
+  const fetchQanda = async () => {
+    if (!user || isQandaFetchingRef.current || !shouldFetchQandaRef.current) {
+      console.log("QandaProvider: Skipping fetchQanda, user:", !!user, "isFetching:", isQandaFetchingRef.current, "shouldFetch:", shouldFetchQandaRef.current);
+      return;
+    }
+    isQandaFetchingRef.current = true;
+    setIsQandaFetching(true);
+
+    try {
+      const params = {
+        userId: user.email.split("@")[0],
+        page: 1,
+        limit: ITEMS_PER_PAGE,
+      };
+      const response = await axios.get(`${API_URL}/user/get-qanda`, { params });
+      let newPairs = response.data.qanda || [];
+      
+      // Shuffle the pairs for random order
+      for (let i = newPairs.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [newPairs[i], newPairs[j]] = [newPairs[j], newPairs[i]];
+      }
+
+      setQandaPairs(newPairs);
+      console.log("QandaProvider: Fetched", newPairs.length, "Q&A pairs");
+    } catch (err) {
+      console.error("QandaProvider: Error prefetching Q&A pairs:", err.message);
+      setQandaPairs([]);
+    } finally {
+      isQandaFetchingRef.current = false;
+      setIsQandaFetching(false);
+      shouldFetchQandaRef.current = false;
+    }
+  };
+
+  const refreshQanda = () => {
+    console.log("QandaProvider: Refreshing Q&A pairs");
+    shouldFetchQandaRef.current = true;
+    setQandaPairs([]); // Clear pairs to force new fetch
+  };
+
+  const batchFetchMCQs = async (subjects, requestedCountPerSubject, initialMCQIds, apiUrl) => {
+    try {
+      const books = subjects.map(subject => ({
+        book: subject,
+        requestedCount: requestedCountPerSubject
+      }));
+
+      const response = await fetch(`${apiUrl}/user/get-multi-book-mcqs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ books })
+      });
+
+      if (!response.ok) {
+        console.warn(`Failed to fetch MCQs: HTTP ${response.status}`);
+        return [];
+      }
+
+      const data = await response.json();
+      if (!data.mcqs || data.mcqs.length === 0) {
+        console.warn("No MCQs returned from batch endpoint");
+        return [];
+      }
+
+      const transformedMCQs = data.mcqs
+        .filter(mcq => {
+          if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
+            return false;
+          }
+          if (initialMCQIds.includes(mcq._id?.toString())) {
+            return false;
+          }
+          return true;
+        })
+        .map(mcq => ({
+          question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
+          options: mcq.mcq.options,
+          correctAnswer: mcq.mcq.correctAnswer,
+          explanation: mcq.mcq.explanation,
+          category: mcq.category || "",
+          id: mcq._id,
+        }));
+
+      return transformedMCQs;
+    } catch (err) {
+      console.error("Error in batchFetchMCQs:", err);
+      return [];
+    }
+  };
+
+  const fetchInitialMCQs = async () => {
+    if (isMcqsFetchingRef.current || !user) return;
+    isMcqsFetchingRef.current = true;
+    setIsMcqsFetching(true);
+
+    console.log("QandaProvider: fetchInitialMCQs called");
+
+    try {
+      const subjects = [
+        "Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture",
+        "FundamentalGeography", "IndianGeography", "Science",
+        "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers",
+      ];
+      const initialCount = 3;
+      const cacheCount = 6;
+      const totalCount = initialCount + cacheCount;
+      const questionsPerSubject = Math.ceil(totalCount / subjects.length);
+      const initialMCQIds = [];
+
+      let initialMCQs = await batchFetchMCQs(subjects, questionsPerSubject, initialMCQIds, API_URL);
+      initialMCQIds.push(...initialMCQs.map(mcq => mcq.id.toString()));
+
+      initialMCQs = initialMCQs.slice(0, totalCount);
+      console.log("QandaProvider: Fetched initial MCQs", initialMCQs.length);
+
+      for (let i = initialMCQs.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [initialMCQs[i], initialMCQs[j]] = [initialMCQs[j], initialMCQs[i]];
+      }
+
+      setMcqs(initialMCQs.slice(0, initialCount));
+      setCachedMcqs(initialMCQs.slice(initialCount));
+    } catch (err) {
+      console.error("QandaProvider: Initial MCQ fetch error:", err);
+      setMcqs([]);
+      setCachedMcqs([]);
+    } finally {
+      isMcqsFetchingRef.current = false;
+      setIsMcqsFetching(false);
+    }
+  };
+
+  const fetchNewInitialMCQs = async () => {
+    if (isMcqsFetchingRef.current || cachedMcqs.length >= 3) return;
+    isMcqsFetchingRef.current = true;
+    setIsMcqsFetching(true);
+
+    console.log("QandaProvider: fetchNewInitialMCQs called");
+
+    try {
+      const subjects = [
+        "Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture",
+        "FundamentalGeography", "IndianGeography", "Science",
+        "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers",
+      ];
+      const initialCount = 3;
+      const questionsPerSubject = Math.ceil(initialCount / subjects.length);
+      const initialMCQIds = [...mcqs.map(mcq => mcq.id.toString()), ...cachedMcqs.map(mcq => mcq.id.toString())];
+
+      let initialMCQs = await batchFetchMCQs(subjects, questionsPerSubject, initialMCQIds, API_URL);
+
+      initialMCQs = initialMCQs.slice(0, initialCount);
+      console.log("QandaProvider: Fetched new initial MCQs", initialMCQs.length);
+
+      for (let i = initialMCQs.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [initialMCQs[i], initialMCQs[j]] = [initialMCQs[j], initialMCQs[i]];
+      }
+
+      setCachedMcqs(prev => [...prev, ...initialMCQs]);
+    } catch (err) {
+      console.error("QandaProvider: New initial MCQ fetch error:", err);
+      setCachedMcqs([]);
+    } finally {
+      isMcqsFetchingRef.current = false;
+      setIsMcqsFetching(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user) {
+      fetchQanda();
+      fetchInitialMCQs();
+    } else {
+      setQandaPairs([]);
+      setMcqs([]);
+      setCachedMcqs([]);
+      setIsMcqsFetching(false);
+      setIsQandaFetching(false);
+      shouldFetchQandaRef.current = true;
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (shouldFetchQandaRef.current && user) {
+      fetchQanda();
+    }
+  }, [shouldFetchQandaRef.current, user]);
+
+  return (
+    <QandaContext.Provider value={{ qandaPairs, setQandaPairs, fetchQanda, refreshQanda, mcqs, setMcqs, fetchNewInitialMCQs, isMcqsFetching, cachedMcqs, setCachedMcqs, isQandaFetching }}>
+      {children}
+    </QandaContext.Provider>
+  );
+};
 
 const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -75,7 +330,7 @@ const AuthProvider = ({ children }) => {
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || `Failed to save user: ${response.statusText}`);
+        throw new Error(errorData.error || `${response.statusText}`);
       }
 
       const data = await response.json();
@@ -173,91 +428,52 @@ const AuthProvider = ({ children }) => {
 
   return (
     <AuthContext.Provider value={{ user, signupWithGoogle, setUsername, loginWithGoogle, logout }}>
-      <GoogleOAuthProvider clientId="315117520479-orqa5uodhm438jd1n37g2q4kt2oc46ep.apps.googleusercontent.com">
-        {children}
-      </GoogleOAuthProvider>
+      {children}
     </AuthContext.Provider>
   );
 };
 
-export const Profile = () => {
-  const { user, logout } = useAuth();
-  const navigate = useNavigate();
-  const [showProfile, setShowProfile] = useState(false);
-
-  if (!user) return null;
-
-  const handleLogout = () => {
-    logout();
-    setShowProfile(false);
-  };
-
-  return (
-    <div className="relative">
-      <div
-        className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center cursor-pointer"
-        onClick={() => setShowProfile(!showProfile)}
-      >
-        <span className="text-xl">{user.username ? user.username[0].toUpperCase() : user.email[0].toUpperCase()}</span>
-      </div>
-      {showProfile && (
-        <div className="absolute top-12 right-0 bg-gray-800 p-4 rounded-lg shadow-lg z-100">
-          <p>Email: {user.email}</p>
-          <p>Username: {user.username || "Not set"}</p>
-          <button
-            onClick={handleLogout}
-            className="mt-2 text-blue-400 hover:text-blue-500 transition-colors duration-300"
-          >
-            Logout
-          </button>
-        </div>
-      )}
-    </div>
-  );
-};
-
-const ProtectedRoute = ({ children }) => {
-  const { user } = useAuth();
-  const location = useLocation();
-  return user ? children : <Navigate to="/login" state={{ from: location.pathname }} />;
-};
-
 function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<UPSCPrelims />} />
-          <Route path="/upsc-prelims" element={<Navigate to="/" replace />} />
-          <Route path="/news" element={<ProtectedRoute><NewsCard /></ProtectedRoute>} />
-          <Route path="/battleground" element={<ProtectedRoute><Battleground /></ProtectedRoute>} />
-          <Route path="/login" element={<LoginSignup />} />
-          <Route path="/polity" element={<ProtectedRoute><Polity /></ProtectedRoute>} />
-          <Route path="/laxmikanth" element={<ProtectedRoute><Laxmikanth /></ProtectedRoute>} />
-          <Route path="/shankelias" element={<ProtectedRoute><ShankarIas /></ProtectedRoute>} />
-          <Route path="/ramesh-singh" element={<ProtectedRoute><RameshSingh /></ProtectedRoute>} />
-          <Route path="/csat" element={<ProtectedRoute><CSAT /></ProtectedRoute>} />
-          <Route path="/disha-csat" element={<ProtectedRoute><DishaCSAT /></ProtectedRoute>} />
-          <Route path="/geography" element={<ProtectedRoute><Geography /></ProtectedRoute>} />
-          <Route path="/geography/fundamental-geography" element={<ProtectedRoute><FundamentalGeography /></ProtectedRoute>} />
-          <Route path="/geography/indian-geography" element={<ProtectedRoute><IndianGeography /></ProtectedRoute>} />
-          <Route path="/geography/atlas" element={<ProtectedRoute><Atlas /></ProtectedRoute>} />
-          <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />
-          <Route path="/history/tamilnadu" element={<ProtectedRoute><TamilnaduHistory /></ProtectedRoute>} />
-          <Route path="/history/spectrum" element={<ProtectedRoute><Spectrum /></ProtectedRoute>} />
-          <Route path="/history/artifacts" element={<ProtectedRoute><ArtAndCulture /></ProtectedRoute>} />
-          <Route path="/science" element={<ProtectedRoute><Science /></ProtectedRoute>} />
-          <Route path="/disha-ias-science" element={<ProtectedRoute><DishaIasScience /></ProtectedRoute>} />
-          <Route path="/environment" element={<ProtectedRoute><Environment /></ProtectedRoute>} />
-          <Route path="/economy" element={<ProtectedRoute><Economy /></ProtectedRoute>} />
-          <Route path="/current-affairs" element={<ProtectedRoute><CurrentAffairs /></ProtectedRoute>} />
-          <Route path="/vision-ias-dec-2024" element={<ProtectedRoute><VisionIasDec2024 /></ProtectedRoute>} />
-          <Route path="/previous-year-papers" element={<ProtectedRoute><PreviousYearPapers /></ProtectedRoute>} />
-          <Route path="/disha-ias-previous-year-paper" element={<ProtectedRoute><DishaIasPreviousYearPaper /></ProtectedRoute>} />
-          <Route path="/oneliners" element={<ProtectedRoute><OneLiner /></ProtectedRoute>} />
-        </Routes>
-      </BrowserRouter>
-    </AuthProvider>
+    <GoogleOAuthProvider clientId="315117520479-orqa5uodhm438jd1n37g2q4kt2oc46ep.apps.googleusercontent.com">
+      <AuthProvider>
+        <QandaProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/upsc-prelims" element={<UPSCPrelims />} />
+              <Route path="/" element={<Navigate to="/upsc-prelims?view=test" replace />} />
+              <Route path="/login" element={<LoginSignup />} />
+              <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+              <Route path="/polity" element={<ProtectedRoute><Polity /></ProtectedRoute>} />
+              <Route path="/laxmikanth" element={<ProtectedRoute><Laxmikanth /></ProtectedRoute>} />
+              <Route path="/shankelias" element={<ProtectedRoute><ShankarIas /></ProtectedRoute>} />
+              <Route path="/ramesh-singh" element={<ProtectedRoute><RameshSingh /></ProtectedRoute>} />
+              <Route path="/csat" element={<ProtectedRoute><CSAT /></ProtectedRoute>} />
+              <Route path="/disha-csat" element={<ProtectedRoute><DishaCSAT /></ProtectedRoute>} />
+              <Route path="/geography" element={<ProtectedRoute><Geography /></ProtectedRoute>} />
+              <Route path="/geography/fundamental-geography" element={<ProtectedRoute><FundamentalGeography /></ProtectedRoute>} />
+              <Route path="/geography/indian-geography" element={<ProtectedRoute><IndianGeography /></ProtectedRoute>} />
+              <Route path="/geography/atlas" element={<ProtectedRoute><Atlas /></ProtectedRoute>} />
+              <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />
+              <Route path="/history/tamilnadu" element={<ProtectedRoute><TamilnaduHistory /></ProtectedRoute>} />
+              <Route path="/history/spectrum" element={<ProtectedRoute><Spectrum /></ProtectedRoute>} />
+              <Route path="/history/artifacts" element={<ProtectedRoute><ArtAndCulture /></ProtectedRoute>} />
+              <Route path="/science" element={<ProtectedRoute><Science /></ProtectedRoute>} />
+              <Route path="/disha-ias-science" element={<ProtectedRoute><DishaIasScience /></ProtectedRoute>} />
+              <Route path="/environment" element={<ProtectedRoute><Environment /></ProtectedRoute>} />
+              <Route path="/economy" element={<ProtectedRoute><Economy /></ProtectedRoute>} />
+              <Route path="/current-affairs" element={<ProtectedRoute><CurrentAffairs /></ProtectedRoute>} />
+              <Route path="/vision-ias-dec-2024" element={<ProtectedRoute><VisionIasDec2024 /></ProtectedRoute>} />
+              <Route path="/previous-year-papers" element={<ProtectedRoute><PreviousYearPapers /></ProtectedRoute>} />
+              <Route path="/disha-ias-previous-year-paper" element={<ProtectedRoute><DishaIasPreviousYearPaper /></ProtectedRoute>} />
+              <Route path="/oneliners" element={<ProtectedRoute><OneLiner /></ProtectedRoute>} />
+              <Route path="/battleground" element={<ProtectedRoute><Battleground /></ProtectedRoute>} />
+              <Route path="*" element={<Navigate to="/upsc-prelims?view=test" replace />} />
+            </Routes>
+          </BrowserRouter>
+        </QandaProvider>
+      </AuthProvider>
+    </GoogleOAuthProvider>
   );
 }
 
@@ -268,7 +484,7 @@ const LoginSignup = () => {
   const [username, setUsernameInput] = useState("");
   const [error, setError] = useState("");
 
-  const from = location.state?.from || "/";
+  const from = location.state?.from || "/upsc-prelims?view=test";
 
   const handleGoogleSuccess = (credentialResponse) => {
     const isNewUser = signupWithGoogle(credentialResponse);
