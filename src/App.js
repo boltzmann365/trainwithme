@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from
 import { GoogleOAuthProvider, GoogleLogin } from "@react-oauth/google";
 import axios from "axios";
 import UPSCPrelims from "./pages/UPSCPrelims";
-import NewsCard from "./pages/subjects/NewsCard"; // Correct component for the news page
+import NewsCard from "./pages/subjects/NewsCard";
 import Polity from "./pages/subjects/Polity";
 import CSAT from "./pages/subjects/CSAT";
 import Geography from "./pages/subjects/Geography";
@@ -11,7 +11,6 @@ import History from "./pages/subjects/History";
 import Science from "./pages/subjects/Science";
 import Environment from "./pages/subjects/Environment";
 import Economy from "./pages/subjects/Economy";
-// Note: The old 'CurrentAffairs' component is no longer used in routing, replaced by NewsCard
 import PreviousYearPapers from "./pages/subjects/PreviousYearPapers";
 import TamilnaduHistory from "./pages/subjects/TamilnaduHistory";
 import Spectrum from "./pages/subjects/Spectrum";
@@ -255,12 +254,11 @@ const QandaProvider = ({ children }) => {
 
 const ArticleProvider = ({ children }) => {
   const [articles, setArticles] = useState([]);
-  const [isArticlesFetching, setIsArticlesFetching] = useState(true); // Set to true initially
+  const [isArticlesFetching, setIsArticlesFetching] = useState(true);
   const [articlesError, setArticlesError] = useState(null);
   const API_URL = "https://new-backend-tx3z.onrender.com";
 
   const prefetchArticles = async () => {
-    // This function will run once when the app loads
     setIsArticlesFetching(true);
     setArticlesError(null);
     try {
@@ -281,7 +279,6 @@ const ArticleProvider = ({ children }) => {
   };
 
   useEffect(() => {
-    // Prefetch articles when the provider mounts
     prefetchArticles();
   }, []);
 
@@ -292,6 +289,9 @@ const ArticleProvider = ({ children }) => {
   );
 };
 
+// ===================================================================
+// START OF MODIFIED SECTION 1: AuthProvider
+// ===================================================================
 const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
 
@@ -319,7 +319,7 @@ const AuthProvider = ({ children }) => {
 
   const saveUserToServer = async (email, username, setError) => {
     try {
-      const response = await fetch("https://trainwithme-backend.onrender.com/save-user", {
+      const response = await fetch("https://new-backend-tx3z.onrender.com/save-user", { // Corrected backend URL
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, username }),
@@ -337,13 +337,14 @@ const AuthProvider = ({ children }) => {
     }
   };
 
-  const signupWithGoogle = (credentialResponse) => {
-    const jwtDecode = (token) => {
-      const base64Url = token.split(".")[1];
+  // MODIFIED FUNCTION: It now accepts the token string directly
+  const signupWithGoogle = (token) => {
+    const jwtDecode = (t) => {
+      const base64Url = t.split(".")[1];
       const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
       return JSON.parse(window.atob(base64));
     };
-    const decoded = jwtDecode(credentialResponse.credential);
+    const decoded = jwtDecode(token); // Use the token directly
     const email = decoded.email;
     const googleId = decoded.sub;
     const userProfiles = JSON.parse(localStorage.getItem("userProfiles") || "{}");
@@ -352,6 +353,7 @@ const AuthProvider = ({ children }) => {
     if (!areUsersEqual(user, newUser)) {
       setUser(newUser);
     }
+    // This now correctly returns true if the user is new (needs a username)
     return !existingUsername;
   };
 
@@ -367,6 +369,8 @@ const AuthProvider = ({ children }) => {
   };
 
   const loginWithGoogle = (credentialResponse) => {
+    // This function can be simplified now, but we'll leave it for compatibility
+    // The main flow is handled by signupWithGoogle now
     const jwtDecode = (token) => {
       const base64Url = token.split(".")[1];
       const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
@@ -386,7 +390,8 @@ const AuthProvider = ({ children }) => {
       saveUserToServer(email, updatedUser.username);
       return true;
     } else {
-      signupWithGoogle(credentialResponse);
+      // This part now correctly calls the modified signup function
+      signupWithGoogle(credentialResponse.credential); 
       return false;
     }
   };
@@ -402,6 +407,10 @@ const AuthProvider = ({ children }) => {
     </AuthContext.Provider>
   );
 };
+// ===================================================================
+// END OF MODIFIED SECTION 1
+// ===================================================================
+
 
 function App() {
   return (
@@ -414,7 +423,6 @@ function App() {
                 <Route path="/" element={<Navigate to="/upsc-prelims" replace />} />
                 <Route path="/upsc-prelims" element={<UPSCPrelims />} />
                 <Route path="/current-affairs" element={<ProtectedRoute><NewsCard /></ProtectedRoute>} />
-
                 <Route path="/login" element={<LoginSignup />} />
                 <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
                 <Route path="/polity" element={<ProtectedRoute><Polity /></ProtectedRoute>} />
@@ -440,7 +448,6 @@ function App() {
                 <Route path="/disha-ias-previous-year-paper" element={<ProtectedRoute><DishaIasPreviousYearPaper /></ProtectedRoute>} />
                 <Route path="/oneliners" element={<ProtectedRoute><OneLiner /></ProtectedRoute>} />
                 <Route path="/battleground" element={<ProtectedRoute><Battleground /></ProtectedRoute>} />
-                
                 <Route path="*" element={<Navigate to="/upsc-prelims" replace />} />
               </Routes>
             </BrowserRouter>
@@ -451,32 +458,87 @@ function App() {
   );
 }
 
+// ===================================================================
+// START OF MODIFIED SECTION 2: LoginSignup Component
+// ===================================================================
 const LoginSignup = () => {
-  const { user, signupWithGoogle, loginWithGoogle, setUsername } = useAuth();
+  const { user, signupWithGoogle, setUsername } = useAuth(); // Removed unused loginWithGoogle
   const navigate = useNavigate();
   const location = useLocation();
-  const [username, setUsernameInput] = useState("");
+  const [usernameInput, setUsernameInputState] = useState(""); // Renamed to avoid conflict
   const [error, setError] = useState("");
 
   const from = location.state?.from || "/upsc-prelims";
 
-  const handleGoogleSuccess = (credentialResponse) => {
-    const isNewUser = signupWithGoogle(credentialResponse);
+  // This function handles success from the WEB version's GoogleLogin component
+  const handleWebGoogleSuccess = (credentialResponse) => {
+    const token = credentialResponse.credential;
+    const isNewUser = signupWithGoogle(token);
+    if (!isNewUser) {
+      navigate(from, { replace: true });
+    }
+  };
+  
+  // This function handles success from the NATIVE Android app
+  const handleNativeGoogleSuccess = (token) => {
+    const isNewUser = signupWithGoogle(token);
     if (!isNewUser) {
       navigate(from, { replace: true });
     }
   };
 
   const handleGoogleFailure = () => {
-    setError("Google authentication failed");
+    setError("Google authentication failed. Please try again.");
   };
+
+  // This `useEffect` listens for the custom event from our native Android "bridge"
+  useEffect(() => {
+    const handleNativeToken = (event) => {
+      const { token } = event.detail;
+      if (token) {
+        handleNativeGoogleSuccess(token);
+      }
+    };
+    window.addEventListener('google-sign-in-success', handleNativeToken);
+    
+    // Cleanup the event listener when the component unmounts
+    return () => {
+      window.removeEventListener('google-sign-in-success', handleNativeToken);
+    };
+  }, []); // The empty array ensures this runs only once
 
   const handleUsernameSubmit = async (e) => {
     e.preventDefault();
-    setUsername(username, setError);
+    setUsername(usernameInput, setError);
     navigate(from, { replace: true });
   };
 
+  // The new button for the Android app
+  const NativeGoogleButton = () => (
+    <button
+      onClick={() => {
+        if (window.AndroidBridge && typeof window.AndroidBridge.performGoogleSignIn === 'function') {
+          window.AndroidBridge.performGoogleSignIn();
+        } else {
+          setError("Cannot find native sign-in function.");
+        }
+      }}
+      className="w-full bg-blue-600 p-2 rounded hover:bg-blue-700 transition-colors duration-300 text-white"
+    >
+      Continue with Google
+    </button>
+  );
+
+  // Your original GoogleLogin component for the web browser
+  const WebGoogleButton = () => (
+    <GoogleLogin
+      onSuccess={handleWebGoogleSuccess}
+      onError={handleGoogleFailure}
+    />
+  );
+
+  // RENDER LOGIC:
+  // If the user is new and needs to set a username, show the username form.
   if (user && !user.username) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">
@@ -485,8 +547,8 @@ const LoginSignup = () => {
           {error && <p className="text-red-400 mb-4">{error}</p>}
           <input
             type="text"
-            value={username}
-            onChange={(e) => setUsernameInput(e.target.value)}
+            value={usernameInput}
+            onChange={(e) => setUsernameInputState(e.target.value)}
             placeholder="Enter unique username"
             className="w-full p-2 mb-4 bg-gray-700 rounded text-white"
             required
@@ -499,20 +561,23 @@ const LoginSignup = () => {
     );
   }
 
+  // Otherwise, show the main Login/Sign Up page.
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">
-      <div className="bg-gray-800 p-6 rounded-lg">
+      <div className="bg-gray-800 p-6 rounded-lg text-center">
         <h2 className="text-2xl mb-4">Login or Sign Up</h2>
         {error && <p className="text-red-400 mb-4">{error}</p>}
-        <GoogleLogin
-          onSuccess={handleGoogleSuccess}
-          onError={handleGoogleFailure}
-          buttonText="Continue with Google"
-          className="w-full bg-white text-black p-2 rounded hover:bg-gray-200"
-        />
+        
+        {/* This is the key: Check if we are inside the app.
+            If window.AndroidBridge exists, show the native button.
+            Otherwise, show the standard web button. */}
+        {window.AndroidBridge ? <NativeGoogleButton /> : <WebGoogleButton />}
       </div>
     </div>
   );
 };
+// ===================================================================
+// END OF MODIFIED SECTION 2
+// ===================================================================
 
 export default App;
