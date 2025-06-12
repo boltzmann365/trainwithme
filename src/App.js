@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from
 import { GoogleOAuthProvider, GoogleLogin } from "@react-oauth/google";
 import axios from "axios";
 import UPSCPrelims from "./pages/UPSCPrelims";
+import NewsCard from "./pages/subjects/NewsCard"; // Correct component for the news page
 import Polity from "./pages/subjects/Polity";
 import CSAT from "./pages/subjects/CSAT";
 import Geography from "./pages/subjects/Geography";
@@ -10,7 +11,7 @@ import History from "./pages/subjects/History";
 import Science from "./pages/subjects/Science";
 import Environment from "./pages/subjects/Environment";
 import Economy from "./pages/subjects/Economy";
-import CurrentAffairs from "./pages/subjects/CurrentAffairs";
+// Note: The old 'CurrentAffairs' component is no longer used in routing, replaced by NewsCard
 import PreviousYearPapers from "./pages/subjects/PreviousYearPapers";
 import TamilnaduHistory from "./pages/subjects/TamilnaduHistory";
 import Spectrum from "./pages/subjects/Spectrum";
@@ -28,6 +29,9 @@ import DishaIasScience from "./pages/subjects/DishaIasScience";
 import OneLiner from "./pages/subjects/OneLiner";
 import Profile from "./pages/subjects/Profile";
 import Battleground from "./pages/subjects/Battleground";
+
+const ArticleContext = createContext();
+export const useArticles = () => useContext(ArticleContext);
 
 const AuthContext = createContext();
 const QandaContext = createContext();
@@ -89,15 +93,14 @@ const QandaProvider = ({ children }) => {
   const isMcqsFetchingRef = useRef(false);
   const isQandaFetchingRef = useRef(false);
   const shouldFetchQandaRef = useRef(true);
+  const refreshTimeoutRef = useRef(null);
 
   const fetchQanda = async () => {
     if (!user || isQandaFetchingRef.current || !shouldFetchQandaRef.current) {
-      console.log("QandaProvider: Skipping fetchQanda, user:", !!user, "isFetching:", isQandaFetchingRef.current, "shouldFetch:", shouldFetchQandaRef.current);
       return;
     }
     isQandaFetchingRef.current = true;
     setIsQandaFetching(true);
-
     try {
       const params = {
         userId: user.email.split("@")[0],
@@ -106,15 +109,11 @@ const QandaProvider = ({ children }) => {
       };
       const response = await axios.get(`${API_URL}/user/get-qanda`, { params });
       let newPairs = response.data.qanda || [];
-      
-      // Shuffle the pairs for random order
       for (let i = newPairs.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [newPairs[i], newPairs[j]] = [newPairs[j], newPairs[i]];
       }
-
       setQandaPairs(newPairs);
-      console.log("QandaProvider: Fetched", newPairs.length, "Q&A pairs");
     } catch (err) {
       console.error("QandaProvider: Error prefetching Q&A pairs:", err.message);
       setQandaPairs([]);
@@ -126,9 +125,14 @@ const QandaProvider = ({ children }) => {
   };
 
   const refreshQanda = () => {
-    console.log("QandaProvider: Refreshing Q&A pairs");
-    shouldFetchQandaRef.current = true;
-    setQandaPairs([]); // Clear pairs to force new fetch
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current);
+    }
+    refreshTimeoutRef.current = setTimeout(() => {
+      shouldFetchQandaRef.current = true;
+      setQandaPairs([]);
+      fetchQanda();
+    }, 300);
   };
 
   const batchFetchMCQs = async (subjects, requestedCountPerSubject, initialMCQIds, apiUrl) => {
@@ -137,34 +141,16 @@ const QandaProvider = ({ children }) => {
         book: subject,
         requestedCount: requestedCountPerSubject
       }));
-
       const response = await fetch(`${apiUrl}/user/get-multi-book-mcqs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ books })
       });
-
-      if (!response.ok) {
-        console.warn(`Failed to fetch MCQs: HTTP ${response.status}`);
-        return [];
-      }
-
+      if (!response.ok) return [];
       const data = await response.json();
-      if (!data.mcqs || data.mcqs.length === 0) {
-        console.warn("No MCQs returned from batch endpoint");
-        return [];
-      }
-
+      if (!data.mcqs || data.mcqs.length === 0) return [];
       const transformedMCQs = data.mcqs
-        .filter(mcq => {
-          if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
-            return false;
-          }
-          if (initialMCQIds.includes(mcq._id?.toString())) {
-            return false;
-          }
-          return true;
-        })
+        .filter(mcq => mcq.mcq && mcq.mcq.question && mcq.mcq.options && mcq.mcq.correctAnswer && mcq.mcq.explanation && !initialMCQIds.includes(mcq._id?.toString()))
         .map(mcq => ({
           question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
           options: mcq.mcq.options,
@@ -173,7 +159,6 @@ const QandaProvider = ({ children }) => {
           category: mcq.category || "",
           id: mcq._id,
         }));
-
       return transformedMCQs;
     } catch (err) {
       console.error("Error in batchFetchMCQs:", err);
@@ -185,32 +170,20 @@ const QandaProvider = ({ children }) => {
     if (isMcqsFetchingRef.current || !user) return;
     isMcqsFetchingRef.current = true;
     setIsMcqsFetching(true);
-
-    console.log("QandaProvider: fetchInitialMCQs called");
-
     try {
-      const subjects = [
-        "Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture",
-        "FundamentalGeography", "IndianGeography", "Science",
-        "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers",
-      ];
+      const subjects = ["Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture", "FundamentalGeography", "IndianGeography", "Science", "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers"];
       const initialCount = 3;
       const cacheCount = 6;
       const totalCount = initialCount + cacheCount;
       const questionsPerSubject = Math.ceil(totalCount / subjects.length);
       const initialMCQIds = [];
-
       let initialMCQs = await batchFetchMCQs(subjects, questionsPerSubject, initialMCQIds, API_URL);
       initialMCQIds.push(...initialMCQs.map(mcq => mcq.id.toString()));
-
       initialMCQs = initialMCQs.slice(0, totalCount);
-      console.log("QandaProvider: Fetched initial MCQs", initialMCQs.length);
-
       for (let i = initialMCQs.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [initialMCQs[i], initialMCQs[j]] = [initialMCQs[j], initialMCQs[i]];
       }
-
       setMcqs(initialMCQs.slice(0, initialCount));
       setCachedMcqs(initialMCQs.slice(initialCount));
     } catch (err) {
@@ -227,29 +200,17 @@ const QandaProvider = ({ children }) => {
     if (isMcqsFetchingRef.current || cachedMcqs.length >= 3) return;
     isMcqsFetchingRef.current = true;
     setIsMcqsFetching(true);
-
-    console.log("QandaProvider: fetchNewInitialMCQs called");
-
     try {
-      const subjects = [
-        "Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture",
-        "FundamentalGeography", "IndianGeography", "Science",
-        "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers",
-      ];
+      const subjects = ["Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture", "FundamentalGeography", "IndianGeography", "Science", "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers"];
       const initialCount = 3;
       const questionsPerSubject = Math.ceil(initialCount / subjects.length);
       const initialMCQIds = [...mcqs.map(mcq => mcq.id.toString()), ...cachedMcqs.map(mcq => mcq.id.toString())];
-
       let initialMCQs = await batchFetchMCQs(subjects, questionsPerSubject, initialMCQIds, API_URL);
-
       initialMCQs = initialMCQs.slice(0, initialCount);
-      console.log("QandaProvider: Fetched new initial MCQs", initialMCQs.length);
-
       for (let i = initialMCQs.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [initialMCQs[i], initialMCQs[j]] = [initialMCQs[j], initialMCQs[i]];
       }
-
       setCachedMcqs(prev => [...prev, ...initialMCQs]);
     } catch (err) {
       console.error("QandaProvider: New initial MCQ fetch error:", err);
@@ -272,6 +233,11 @@ const QandaProvider = ({ children }) => {
       setIsQandaFetching(false);
       shouldFetchQandaRef.current = true;
     }
+    return () => {
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+      }
+    };
   }, [user]);
 
   useEffect(() => {
@@ -287,24 +253,58 @@ const QandaProvider = ({ children }) => {
   );
 };
 
+const ArticleProvider = ({ children }) => {
+  const [articles, setArticles] = useState([]);
+  const [isArticlesFetching, setIsArticlesFetching] = useState(true); // Set to true initially
+  const [articlesError, setArticlesError] = useState(null);
+  const API_URL = "https://new-backend-tx3z.onrender.com";
+
+  const prefetchArticles = async () => {
+    // This function will run once when the app loads
+    setIsArticlesFetching(true);
+    setArticlesError(null);
+    try {
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const response = await axios.get(`${API_URL}/admin/get-current-affairs-articles`, {
+        params: { startDate: thirtyDaysAgo.toISOString().split('T')[0], page: 1, limit: 10 },
+      });
+      const newArticles = response.data.articles || [];
+      setArticles(newArticles);
+    } catch (err) {
+      console.error("ArticleProvider: Error prefetching articles:", err.message);
+      setArticlesError(err.message);
+      setArticles([]);
+    } finally {
+      setIsArticlesFetching(false);
+    }
+  };
+
+  useEffect(() => {
+    // Prefetch articles when the provider mounts
+    prefetchArticles();
+  }, []);
+
+  return (
+    <ArticleContext.Provider value={{ articles, setArticles, isArticlesFetching, articlesError }}>
+      {children}
+    </ArticleContext.Provider>
+  );
+};
+
 const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
 
   const areUsersEqual = (prevUser, newUser) => {
     if (prevUser === newUser) return true;
     if (!prevUser || !newUser) return false;
-    return (
-      prevUser.email === newUser.email &&
-      prevUser.googleId === newUser.googleId &&
-      prevUser.username === newUser.username
-    );
+    return prevUser.email === newUser.email && prevUser.googleId === newUser.googleId && prevUser.username === newUser.username;
   };
 
   useEffect(() => {
     const savedUser = localStorage.getItem("user");
     if (savedUser) {
       const parsedUser = JSON.parse(savedUser);
-      console.log("AuthProvider: Loading user from localStorage:", parsedUser);
       setUser(parsedUser);
     }
   }, []);
@@ -315,32 +315,24 @@ const AuthProvider = ({ children }) => {
     } else {
       localStorage.removeItem("user");
     }
-    console.log("AuthProvider: user state updated:", user);
   }, [user]);
 
   const saveUserToServer = async (email, username, setError) => {
     try {
       const response = await fetch("https://trainwithme-backend.onrender.com/save-user", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, username }),
       });
-
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || `${response.statusText}`);
       }
-
-      const data = await response.json();
-      console.log("User saved to server:", data);
+      await response.json();
       return true;
     } catch (error) {
       console.error("Error saving user to server:", error.message);
-      if (setError) {
-        setError(error.message);
-      }
+      if (setError) setError(error.message);
       return false;
     }
   };
@@ -354,23 +346,12 @@ const AuthProvider = ({ children }) => {
     const decoded = jwtDecode(credentialResponse.credential);
     const email = decoded.email;
     const googleId = decoded.sub;
-
     const userProfiles = JSON.parse(localStorage.getItem("userProfiles") || "{}");
     const existingUsername = userProfiles[email];
-
-    const newUser = {
-      email,
-      googleId,
-      username: existingUsername || null,
-    };
-
+    const newUser = { email, googleId, username: existingUsername || null };
     if (!areUsersEqual(user, newUser)) {
-      console.log("AuthProvider: Setting new user from signupWithGoogle:", newUser);
       setUser(newUser);
-    } else {
-      console.log("AuthProvider: User unchanged in signupWithGoogle, skipping setUser");
     }
-
     return !existingUsername;
   };
 
@@ -380,10 +361,7 @@ const AuthProvider = ({ children }) => {
       const userProfiles = JSON.parse(localStorage.getItem("userProfiles") || "{}");
       userProfiles[prev.email] = username;
       localStorage.setItem("userProfiles", JSON.stringify(userProfiles));
-
       saveUserToServer(prev.email, username, setError);
-
-      console.log("AuthProvider: Setting username, updated user:", updatedUser);
       return updatedUser;
     });
   };
@@ -397,22 +375,15 @@ const AuthProvider = ({ children }) => {
     const decoded = jwtDecode(credentialResponse.credential);
     const email = decoded.email;
     const googleId = decoded.sub;
-
     const savedUser = JSON.parse(localStorage.getItem("user"));
     const userProfiles = JSON.parse(localStorage.getItem("userProfiles") || "{}");
     const existingUsername = userProfiles[email];
-
     if (savedUser && savedUser.googleId === googleId) {
       const updatedUser = { ...savedUser, username: existingUsername || savedUser.username };
       if (!areUsersEqual(user, updatedUser)) {
-        console.log("AuthProvider: Setting user from loginWithGoogle:", updatedUser);
         setUser(updatedUser);
-      } else {
-        console.log("AuthProvider: User unchanged in loginWithGoogle, skipping setUser");
       }
-
       saveUserToServer(email, updatedUser.username);
-
       return true;
     } else {
       signupWithGoogle(credentialResponse);
@@ -421,7 +392,6 @@ const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
-    console.log("AuthProvider: Logging out user");
     setUser(null);
     localStorage.removeItem("user");
   };
@@ -437,41 +407,45 @@ function App() {
   return (
     <GoogleOAuthProvider clientId="315117520479-orqa5uodhm438jd1n37g2q4kt2oc46ep.apps.googleusercontent.com">
       <AuthProvider>
-        <QandaProvider>
-          <BrowserRouter>
-            <Routes>
-              <Route path="/upsc-prelims" element={<UPSCPrelims />} />
-              <Route path="/" element={<Navigate to="/upsc-prelims?view=test" replace />} />
-              <Route path="/login" element={<LoginSignup />} />
-              <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
-              <Route path="/polity" element={<ProtectedRoute><Polity /></ProtectedRoute>} />
-              <Route path="/laxmikanth" element={<ProtectedRoute><Laxmikanth /></ProtectedRoute>} />
-              <Route path="/shankelias" element={<ProtectedRoute><ShankarIas /></ProtectedRoute>} />
-              <Route path="/ramesh-singh" element={<ProtectedRoute><RameshSingh /></ProtectedRoute>} />
-              <Route path="/csat" element={<ProtectedRoute><CSAT /></ProtectedRoute>} />
-              <Route path="/disha-csat" element={<ProtectedRoute><DishaCSAT /></ProtectedRoute>} />
-              <Route path="/geography" element={<ProtectedRoute><Geography /></ProtectedRoute>} />
-              <Route path="/geography/fundamental-geography" element={<ProtectedRoute><FundamentalGeography /></ProtectedRoute>} />
-              <Route path="/geography/indian-geography" element={<ProtectedRoute><IndianGeography /></ProtectedRoute>} />
-              <Route path="/geography/atlas" element={<ProtectedRoute><Atlas /></ProtectedRoute>} />
-              <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />
-              <Route path="/history/tamilnadu" element={<ProtectedRoute><TamilnaduHistory /></ProtectedRoute>} />
-              <Route path="/history/spectrum" element={<ProtectedRoute><Spectrum /></ProtectedRoute>} />
-              <Route path="/history/artifacts" element={<ProtectedRoute><ArtAndCulture /></ProtectedRoute>} />
-              <Route path="/science" element={<ProtectedRoute><Science /></ProtectedRoute>} />
-              <Route path="/disha-ias-science" element={<ProtectedRoute><DishaIasScience /></ProtectedRoute>} />
-              <Route path="/environment" element={<ProtectedRoute><Environment /></ProtectedRoute>} />
-              <Route path="/economy" element={<ProtectedRoute><Economy /></ProtectedRoute>} />
-              <Route path="/current-affairs" element={<ProtectedRoute><CurrentAffairs /></ProtectedRoute>} />
-              <Route path="/vision-ias-dec-2024" element={<ProtectedRoute><VisionIasDec2024 /></ProtectedRoute>} />
-              <Route path="/previous-year-papers" element={<ProtectedRoute><PreviousYearPapers /></ProtectedRoute>} />
-              <Route path="/disha-ias-previous-year-paper" element={<ProtectedRoute><DishaIasPreviousYearPaper /></ProtectedRoute>} />
-              <Route path="/oneliners" element={<ProtectedRoute><OneLiner /></ProtectedRoute>} />
-              <Route path="/battleground" element={<ProtectedRoute><Battleground /></ProtectedRoute>} />
-              <Route path="*" element={<Navigate to="/upsc-prelims?view=test" replace />} />
-            </Routes>
-          </BrowserRouter>
-        </QandaProvider>
+        <ArticleProvider>
+          <QandaProvider>
+            <BrowserRouter>
+              <Routes>
+                <Route path="/" element={<Navigate to="/upsc-prelims" replace />} />
+                <Route path="/upsc-prelims" element={<UPSCPrelims />} />
+                <Route path="/current-affairs" element={<ProtectedRoute><NewsCard /></ProtectedRoute>} />
+
+                <Route path="/login" element={<LoginSignup />} />
+                <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+                <Route path="/polity" element={<ProtectedRoute><Polity /></ProtectedRoute>} />
+                <Route path="/laxmikanth" element={<ProtectedRoute><Laxmikanth /></ProtectedRoute>} />
+                <Route path="/shankelias" element={<ProtectedRoute><ShankarIas /></ProtectedRoute>} />
+                <Route path="/ramesh-singh" element={<ProtectedRoute><RameshSingh /></ProtectedRoute>} />
+                <Route path="/csat" element={<ProtectedRoute><CSAT /></ProtectedRoute>} />
+                <Route path="/disha-csat" element={<ProtectedRoute><DishaCSAT /></ProtectedRoute>} />
+                <Route path="/geography" element={<ProtectedRoute><Geography /></ProtectedRoute>} />
+                <Route path="/geography/fundamental-geography" element={<ProtectedRoute><FundamentalGeography /></ProtectedRoute>} />
+                <Route path="/geography/indian-geography" element={<ProtectedRoute><IndianGeography /></ProtectedRoute>} />
+                <Route path="/geography/atlas" element={<ProtectedRoute><Atlas /></ProtectedRoute>} />
+                <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />
+                <Route path="/history/tamilnadu" element={<ProtectedRoute><TamilnaduHistory /></ProtectedRoute>} />
+                <Route path="/history/spectrum" element={<ProtectedRoute><Spectrum /></ProtectedRoute>} />
+                <Route path="/history/artifacts" element={<ProtectedRoute><ArtAndCulture /></ProtectedRoute>} />
+                <Route path="/science" element={<ProtectedRoute><Science /></ProtectedRoute>} />
+                <Route path="/disha-ias-science" element={<ProtectedRoute><DishaIasScience /></ProtectedRoute>} />
+                <Route path="/environment" element={<ProtectedRoute><Environment /></ProtectedRoute>} />
+                <Route path="/economy" element={<ProtectedRoute><Economy /></ProtectedRoute>} />
+                <Route path="/vision-ias-dec-2024" element={<ProtectedRoute><VisionIasDec2024 /></ProtectedRoute>} />
+                <Route path="/previous-year-papers" element={<ProtectedRoute><PreviousYearPapers /></ProtectedRoute>} />
+                <Route path="/disha-ias-previous-year-paper" element={<ProtectedRoute><DishaIasPreviousYearPaper /></ProtectedRoute>} />
+                <Route path="/oneliners" element={<ProtectedRoute><OneLiner /></ProtectedRoute>} />
+                <Route path="/battleground" element={<ProtectedRoute><Battleground /></ProtectedRoute>} />
+                
+                <Route path="*" element={<Navigate to="/upsc-prelims" replace />} />
+              </Routes>
+            </BrowserRouter>
+          </QandaProvider>
+        </ArticleProvider>
       </AuthProvider>
     </GoogleOAuthProvider>
   );
@@ -484,7 +458,7 @@ const LoginSignup = () => {
   const [username, setUsernameInput] = useState("");
   const [error, setError] = useState("");
 
-  const from = location.state?.from || "/upsc-prelims?view=test";
+  const from = location.state?.from || "/upsc-prelims";
 
   const handleGoogleSuccess = (credentialResponse) => {
     const isNewUser = signupWithGoogle(credentialResponse);

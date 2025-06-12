@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth, useQanda } from "../../App";
-import BottomBar from "./BottomBar";
 import axios from "axios";
 
 const OneLiner = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { qandaPairs: prefetchedQandaPairs, setQandaPairs, fetchQanda, isQandaFetching, refreshQanda } = useQanda();
+  const {
+    qandaPairs: prefetchedQandaPairs,
+    setQandaPairs,
+    isQandaFetching,
+    refreshQanda,
+  } = useQanda();
   const [qandaPairs, setLocalQandaPairs] = useState([]);
   const [categoryCache, setCategoryCache] = useState({});
   const [loading, setLoading] = useState(false);
@@ -16,10 +20,9 @@ const OneLiner = () => {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState("All");
-  const [view, setView] = useState("qanda");
   const scrollContainerRef = useRef(null);
   const isFetchingRef = useRef(false);
-  const isPrefetchingRef = useRef({}); // Track prefetching per category
+  const isPrefetchingRef = useRef({});
   const isFirstMountRef = useRef(true);
   const API_URL = "https://new-backend-tx3z.onrender.com";
   const ITEMS_PER_PAGE = 10;
@@ -49,16 +52,18 @@ const OneLiner = () => {
         prefetchCategories.map((category) =>
           fetchQandA(true, category, true).then((pairs) => ({ category, pairs }))
         )
-      ).then((results) => {
-        const newCache = results.reduce((acc, { category, pairs }) => {
-          acc[category] = pairs;
-          return acc;
-        }, {});
-        setCategoryCache((prev) => ({ ...prev, ...newCache }));
-        console.log("OneLiner: Prefetched pairs for categories:", Object.keys(newCache));
-      }).catch((err) => {
-        console.error("OneLiner: Error prefetching category pairs:", err.message);
-      });
+      )
+        .then((results) => {
+          const newCache = results.reduce((acc, { category, pairs }) => {
+            acc[category] = pairs;
+            return acc;
+          }, {});
+          setCategoryCache((prev) => ({ ...prev, ...newCache }));
+          console.log("OneLiner: Prefetched pairs for categories:", Object.keys(newCache));
+        })
+        .catch((err) => {
+          console.error("OneLiner: Error prefetching category pairs:", err.message);
+        });
     }
 
     if (isQandaFetching) {
@@ -84,32 +89,47 @@ const OneLiner = () => {
     setLocalQandaPairs([]);
     setPage(1);
     setHasMore(true);
-    if (selectedCategory === "All" && prefetchedQandaPairs.length >= ITEMS_PER_PAGE && !isQandaFetching) {
-      console.log("OneLiner: Restoring prefetched Q&A pairs for All category");
-      setLocalQandaPairs(prefetchedQandaPairs);
-      setPage(2);
-      setHasMore(true);
-      setLoading(false);
-    } else if (selectedCategory !== "All" && categoryCache[`${selectedCategory}_next`] && !isQandaFetching) {
-      console.log(`OneLiner: Using prefetched next Q&A pairs for ${selectedCategory}:`, categoryCache[`${selectedCategory}_next`].length);
-      setLocalQandaPairs(categoryCache[`${selectedCategory}_next`]);
-      setCategoryCache((prev) => {
-        const newCache = { ...prev, [selectedCategory]: prev[`${selectedCategory}_next`] };
-        delete newCache[`${selectedCategory}_next`];
-        return newCache;
-      });
-      setPage(2);
-      setHasMore(true);
-      setLoading(false);
-    } else if (selectedCategory !== "All" && categoryCache[selectedCategory] && !isQandaFetching) {
-      console.log(`OneLiner: Using cached Q&A pairs for ${selectedCategory}:`, categoryCache[selectedCategory].length);
-      setLocalQandaPairs(categoryCache[selectedCategory]);
-      setPage(2);
-      setHasMore(true);
-      setLoading(false);
-    } else if (!isQandaFetching) {
-      console.log("OneLiner: Fetching Q&A pairs for category change...");
-      fetchQandA(true);
+    setError(null); // Clear error on category change
+
+    if (selectedCategory === "All") {
+      if (prefetchedQandaPairs.length >= ITEMS_PER_PAGE && !isQandaFetching) {
+        console.log("OneLiner: Restoring prefetched Q&A pairs for All category");
+        setLocalQandaPairs(prefetchedQandaPairs);
+        setPage(2);
+        setHasMore(true);
+        setLoading(false);
+      } else if (!isQandaFetching) {
+        console.log("OneLiner: All category selected, fetching if needed.");
+        fetchQandA(true);
+      } else if (isQandaFetching) {
+        setLoading(true);
+        setLoadingMessage("Loading Q&A pairs for All...");
+      }
+    } else {
+      if (categoryCache[`${selectedCategory}_next`]) {
+        console.log(
+          `OneLiner: Using prefetched next Q&A pairs for ${selectedCategory}:`,
+          categoryCache[`${selectedCategory}_next`].length
+        );
+        setLocalQandaPairs(categoryCache[`${selectedCategory}_next`]);
+        setCategoryCache((prev) => {
+          const newCache = { ...prev, [selectedCategory]: prev[`${selectedCategory}_next`] };
+          delete newCache[`${selectedCategory}_next`];
+          return newCache;
+        });
+        setPage(2);
+        setHasMore(true);
+        setLoading(false);
+      } else if (categoryCache[selectedCategory]) {
+        console.log(`OneLiner: Using cached Q&A pairs for ${selectedCategory}:`, categoryCache[selectedCategory].length);
+        setLocalQandaPairs(categoryCache[selectedCategory]);
+        setPage(2);
+        setHasMore(true);
+        setLoading(false);
+      } else {
+        console.log("OneLiner: Fetching Q&A pairs for category change...");
+        fetchQandA(true);
+      }
     }
   }, [selectedCategory, prefetchedQandaPairs, isQandaFetching, categoryCache]);
 
@@ -218,23 +238,27 @@ const OneLiner = () => {
     }
   };
 
- const handleCategoryChange = (category) => {
-  if (category !== "All" && selectedCategory !== "All") {
-    const prevCategory = selectedCategory;
+  const handleCategoryChange = (category) => {
+    const prevSelectedCategory = selectedCategory;
 
-    // 1. Show cached Q&A for the new category if available (handled by useEffect)
-    // 2. Clear cache for previous category
-    setCategoryCache((prev) => {
-      const newCache = { ...prev };
-      delete newCache[prevCategory];
-      return newCache;
-    });
+    if (prevSelectedCategory === "All" && category !== "All") {
+      console.log("OneLiner: Switching from 'All'. Triggering refresh for 'All' data.");
+      refreshQanda();
+    } else if (category !== "All" && prevSelectedCategory !== "All") {
+      console.log(`OneLiner: Switching from ${prevSelectedCategory} to ${category}.`);
+      setCategoryCache((prev) => {
+        const newCache = { ...prev };
+        delete newCache[prevSelectedCategory];
+        return newCache;
+      });
+      prefetchNextPairs(prevSelectedCategory);
+    }
+    setSelectedCategory(category);
+  };
 
-    // 3. Prefetch new Q&A for previous category and store as `${prevCategory}_next`
-    prefetchNextPairs(prevCategory);
-  }
-  setSelectedCategory(category);
-};
+  const handleGoBack = () => {
+    navigate("/upsc-prelims");
+  };
 
   return (
     <div className="h-screen bg-gray-900 text-white font-poppins flex flex-col overflow-hidden">
@@ -260,9 +284,10 @@ const OneLiner = () => {
             -ms-overflow-style: none;
             scrollbar-width: none;
           }
+          /* Adjusted category-button for more transparency */
           .category-button {
-            background: rgba(31, 37, 47, 0.6);
-            backdrop-filter: blur(10px);
+            background: rgba(31, 37, 47, 0.3); /* More transparent background */
+            backdrop-filter: blur(8px); /* Keep button blur, can also be removed if top-bar-container handles it well */
             border: none;
             border-radius: 12px;
             padding: 8px 16px;
@@ -276,27 +301,40 @@ const OneLiner = () => {
           }
           .category-button:hover {
             transform: scale(1.05);
-            background: rgba(59, 130, 246, 0.3);
+            background: rgba(59, 130, 246, 0.2); /* More transparent hover */
             color: #ffffff;
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
           }
           .category-button.active {
-            background: rgba(59, 130, 246, 0.6);
+            background: rgba(59, 130, 246, 0.4); /* More transparent active */
             color: #ffffff;
             box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
           }
-          .filter-container {
+
+          /* Top bar container for floating effect */
+          .top-bar-container {
             position: sticky;
             top: 0;
+            z-index: 20;
             display: flex;
-            flex-wrap: nowrap;
+            align-items: center;
+            padding: 12px 16px;
+            background: rgba(17, 24, 39, 0.4); /* Subtle transparent background for blur to apply to */
+            box-shadow: none;
+            backdrop-filter: blur(12px); /* Increased blur for stronger effect */
+            -webkit-backdrop-filter: blur(12px); /* For Safari support */
+          }
+
+          .filter-container {
+            display: flex;
+            align-items: center;
             gap: 8px;
             overflow-x: auto;
-            padding: 16px 0;
-            z-index: 10;
-            background: transparent;
             scrollbar-width: none;
             -ms-overflow-style: none;
+            flex-grow: 1;
+            justify-content: flex-start;
+            margin-left: 1rem;
           }
           .filter-container::-webkit-scrollbar {
             display: none;
@@ -305,65 +343,88 @@ const OneLiner = () => {
             .filter-container {
               flex-wrap: wrap;
               overflow-x: visible;
-              justify-content: space-between;
+              justify-content: flex-start;
+              padding: 0;
             }
             .category-button {
-              flex: 1;
-              min-width: 0;
+              flex: unset;
+              min-width: 100px;
               text-overflow: ellipsis;
             }
           }
         `}
       </style>
 
-      <div className="flex-1 pb-16 px-4 sm:px-6 lg:px-8 w-full overflow-hidden">
+      {/* Unified Top Bar for back button and filter categories - Now "Floating" */}
+      <div className="top-bar-container">
+        {/* Go Back Button */}
+        <button
+          onClick={handleGoBack}
+          className="p-2 rounded-full bg-transparent hover:bg-gray-800 transition-colors duration-200 text-gray-300 hover:text-white"
+          title="Go back to UPSC Prelims"
+        >
+          <svg
+            className="w-6 h-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+          </svg>
+        </button>
+
+        {/* Filter Categories */}
+        <div className="filter-container">
+          {categories.map((category) => (
+            <button
+              key={category}
+              onClick={() => handleCategoryChange(category)}
+              className={`category-button ${selectedCategory === category ? "active" : ""}`}
+            >
+              {category}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Main scrollable Q&A content area */}
+      <div className="flex-1 pb-4 px-0 sm:px-6 lg:px-8 w-full overflow-hidden">
         <div
           ref={scrollContainerRef}
           className="h-full overflow-y-auto scrollbar-hide"
           style={{ scrollBehavior: "smooth" }}
         >
-          <div className="filter-container">
-            {categories.map((category) => (
-              <button
-                key={category}
-                onClick={() => handleCategoryChange(category)}
-                className={`category-button ${selectedCategory === category ? "active" : ""}`}
-              >
-                {category}
-              </button>
-            ))}
-          </div>
-
-          {error && (
-            <div className="p-4 bg-red-950 border border-red-700 rounded-lg w-full mb-6 mt-4">
-              <p className="text-base sm:text-lg text-red-200">{error}</p>
-            </div>
-          )}
-          {qandaPairs.length === 0 && !loading && !error ? (
-            <p className="text-gray-400 text-center mt-4">
-              No Q and A pairs available for {selectedCategory === "All" ? "any category" : selectedCategory}.
-            </p>
-          ) : (
-            qandaPairs.map((pair, index) => (
-              <div
-                key={index}
-                className="qanda-card bg-gradient-to-br from-gray-800 to-gray-700 p-6 rounded-xl shadow-lg hover:shadow-xl shadow-gray-600/50 border border-gray-600/30 mb-6 w-full transition-all duration-300 mt-4"
-              >
-                <p className="text-lg sm:text-xl font-bold text-white mb-3">{pair.question}</p>
-                <p className="text-base text-gray-200 leading-relaxed">{pair.answer}</p>
-                <p className="text-sm text-gray-400 mt-3 italic">Subject: {pair.category}</p>
+          <div className="pt-4 px-4 sm:px-0">
+            {error && (
+              <div className="p-4 bg-red-950 border border-red-700 rounded-lg w-full mb-6 mt-4">
+                <p className="text-base sm:text-lg text-red-200">{error}</p>
               </div>
-            ))
-          )}
-          {loading && (
-            <div className="flex items-center justify-center py-4">
-              <span className="inline-block w-12 h-12 border-4 border-blue-400 border-t-transparent rounded-full animate-spin"></span>
-            </div>
-          )}
+            )}
+            {qandaPairs.length === 0 && !loading && !error ? (
+              <p className="text-gray-400 text-center mt-4">
+                No Q and A pairs available for {selectedCategory === "All" ? "any category" : selectedCategory}.
+              </p>
+            ) : (
+              qandaPairs.map((pair, index) => (
+                <div
+                  key={index}
+                  className="qanda-card bg-gradient-to-br from-gray-800 to-gray-700 p-6 rounded-xl shadow-lg hover:shadow-xl shadow-gray-600/50 border border-gray-600/30 mb-6 w-full transition-all duration-300 mt-4"
+                >
+                  <p className="text-lg sm:text-xl font-bold text-white mb-3">{pair.question}</p>
+                  <p className="text-base text-gray-200 leading-relaxed">{pair.answer}</p>
+                  <p className="text-sm text-gray-400 mt-3 italic">Subject: {pair.category}</p>
+                </div>
+              ))
+            )}
+            {loading && (
+              <div className="flex items-center justify-center py-4">
+                <span className="inline-block w-12 h-12 border-4 border-blue-400 border-t-transparent rounded-full animate-spin"></span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
-
-      <BottomBar view={view} setView={setView} />
     </div>
   );
 };

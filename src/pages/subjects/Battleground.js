@@ -17,15 +17,13 @@ const Battleground = () => {
   const [selectedOption, setSelectedOption] = useState("");
   const [showExplanation, setShowExplanation] = useState(false);
   const [score, setScore] = useState(null);
-  const [showScorePopup, setShowScorePopup] = useState(false);
-  const [isScoreMinimized, setIsScoreMinimized] = useState(true);
+  const [showResultsPage, setShowResultsPage] = useState(false);
   const [filter, setFilter] = useState("all");
   const [showSidebar, setShowSidebar] = useState(false);
   const [fontSize, setFontSize] = useState(24);
   const [maxQuestionReached, setMaxQuestionReached] = useState(0);
   const [leaderboard, setLeaderboard] = useState([]);
-  const [showLeaderboardPopup, setShowLeaderboardPopup] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(10 * 60); // Default 10 minutes
+  const [timeLeft, setTimeLeft] = useState(6 * 60); // 6 minutes for 10 questions
   const [timerActive, setTimerActive] = useState(false);
   const [totalQuestions, setTotalQuestions] = useState(10);
 
@@ -64,7 +62,7 @@ const Battleground = () => {
       }, 1000);
     }
     return () => clearInterval(timer);
-  }, [timerActive]);
+  }, [timerActive, timeLeft]);
 
   const formatTime = (seconds) => {
     const minutes = Math.floor(seconds / 60);
@@ -73,7 +71,7 @@ const Battleground = () => {
   };
 
   const handleGoBack = () => {
-    fetchNewInitialMCQs(); // Run in background
+    fetchNewInitialMCQs();
     navigate("/upsc-prelims");
   };
 
@@ -116,7 +114,7 @@ const Battleground = () => {
           options: mcq.mcq.options,
           correctAnswer: mcq.mcq.correctAnswer,
           explanation: mcq.mcq.explanation,
-          category: mcq.category || "",
+          category: mcq.category || null,
           id: mcq._id,
         }));
 
@@ -192,9 +190,7 @@ const Battleground = () => {
         setScore(null);
         setSelectedOption("");
         setShowExplanation(false);
-        setShowScorePopup(false);
-        setShowLeaderboardPopup(false);
-        setIsScoreMinimized(true);
+        setShowResultsPage(false);
         setTestStarted(true);
         setTimerActive(true);
         setTotalQuestions(10);
@@ -221,7 +217,7 @@ const Battleground = () => {
 
   const toggleSidebar = () => {
     if (!showSidebar && cachedMcqs.length < 3) {
-      fetchNewInitialMCQs(); // Run in background only if cache is low
+      fetchNewInitialMCQs();
     }
     setShowSidebar(prev => !prev);
   };
@@ -344,13 +340,9 @@ const Battleground = () => {
 
     const unattempted = questions.length - attempted;
     const totalScore = (correctCount * 2) - (wrongCount * 0.66);
-    const percentage = (totalScore / (questions.length * 2)) * 100;
+    const percentage = questions.length > 0 ? (totalScore / (questions.length * 2)) * 100 : 0;
 
     setScore(totalScore);
-    setCurrentQuestionIndex(0);
-    setSelectedOption(newAnswers[0] || "");
-    setShowExplanation(false);
-    setShowScorePopup(true);
     setTimerActive(false);
 
     setScoreDetails({
@@ -363,12 +355,14 @@ const Battleground = () => {
       percentage: percentage.toFixed(2),
     });
 
+    setShowResultsPage(true);
+
     fetch(`${API_URL}/battleground/submit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         username: user.username,
-        score: totalScore
+        score: totalScore,
       }),
     })
       .then(res => {
@@ -394,9 +388,7 @@ const Battleground = () => {
     setScore(null);
     setSelectedOption("");
     setShowExplanation(false);
-    setShowScorePopup(false);
-    setShowLeaderboardPopup(false);
-    setIsScoreMinimized(true);
+    setShowResultsPage(false);
     setFilter("all");
     setShowSidebar(false);
     setMaxQuestionReached(0);
@@ -410,7 +402,7 @@ const Battleground = () => {
       percentage: 0,
     });
     setLoading(false);
-    setTimeLeft(questionCount === 25 ? 12 * 60 : questionCount === 50 ? 30 * 60 : questionCount === 100 ? 60 * 60 : 10 * 60);
+    setTimeLeft(questionCount === 25 ? 12 * 60 : questionCount === 50 ? 30 * 60 : questionCount === 100 ? 60 * 60 : 6 * 60);
     setTimerActive(true);
     setTotalQuestions(questionCount);
     setTestStarted(true);
@@ -436,7 +428,7 @@ const Battleground = () => {
         setMcqs(cachedMcqs.slice(0, 3));
         setCachedMcqs(cachedMcqs.slice(3));
         resetTest(parsedCount);
-        fetchNewInitialMCQs(); // Replenish cache in background
+        fetchNewInitialMCQs();
       } else if (isMcqsFetching) {
         console.log("Battleground: Waiting for MCQs to load for question count", parsedCount);
         setLoading(true);
@@ -447,58 +439,48 @@ const Battleground = () => {
     }
   };
 
-  const isTableBasedQuestion = (questionLines) => {
-    return (
-      questionLines &&
-      questionLines.some((line) => line.includes("    ")) &&
-      questionLines.some((line) => /^\([A-D]\)/.test(line))
-    );
-  };
+  // ---- Question Type Detection Functions ----
+  const isTableBasedQuestion = (questionLines) => (
+    questionLines &&
+    questionLines.some((line) => line.includes("      ")) &&
+    questionLines.some((line) => /^\([A-D]\)/.test(line))
+  );
 
-  const isAssertionReasonQuestion = (questionLines) => {
-    return (
-      questionLines &&
-      questionLines.some((line) => line.startsWith("Assertion (A):")) &&
-      questionLines.some((line) => line.startsWith("Reason (R):"))
-    );
-  };
+  const isAssertionReasonQuestion = (questionLines) => (
+    questionLines &&
+    questionLines.some((line) => line.startsWith("Assertion (A):")) &&
+    questionLines.some((line) => line.startsWith("Reason (R):"))
+  );
 
-  const isStatementBasedQuestion = (questionLines) => {
-    return (
-      questionLines &&
-      questionLines.some((line) => /^\d+\./.test(line)) &&
-      (questionLines.some((line) => line.includes("Which of the statements given above is/are correct?")) ||
-       questionLines.some((line) => line.includes("How many of the above statements are correct?")))
-    );
-  };
+  const isStatementBasedQuestion = (questionLines) => (
+    questionLines &&
+    questionLines.some((line) => /^\d+\./.test(line)) &&
+    (questionLines.some((line) => line.includes("Which of the statements given above is/are correct?")) ||
+     questionLines.some((line) => line.includes("How many of the above statements are correct?")))
+  );
 
-  const isChronologicalOrderQuestion = (questionLines) => {
-    return (
-      questionLines &&
-      questionLines.some((line) => line.includes("Arrange the following")) &&
-      questionLines.some((line) => line.includes("chronological order"))
-    );
-  };
+  const isChronologicalOrderQuestion = (questionLines) => (
+    questionLines &&
+    questionLines.some((line) => line.includes("Arrange the following")) &&
+    questionLines.some((line) => line.includes("chronological order"))
+  );
 
-  const isCorrectlyMatchedPairsQuestion = (questionLines) => {
-    return (
-      questionLines &&
-      questionLines.some((line) => line.includes("Consider the following pairs")) &&
-      questionLines.some((line) => line.includes("Which of the pairs are correctly matched?"))
-    );
-  };
+  const isCorrectlyMatchedPairsQuestion = (questionLines) => (
+    questionLines &&
+    questionLines.some((line) => line.includes("Consider the following pairs")) &&
+    questionLines.some((line) => line.includes("Which of the pairs are correctly matched?"))
+  );
 
-  const isDirectQuestion = (questionLines) => {
-    return (
-      questionLines &&
-      !isStatementBasedQuestion(questionLines) &&
-      !isAssertionReasonQuestion(questionLines) &&
-      !isTableBasedQuestion(questionLines) &&
-      !isChronologicalOrderQuestion(questionLines) &&
-      !isCorrectlyMatchedPairsQuestion(questionLines)
-    );
-  };
+  const isDirectQuestion = (questionLines) => (
+    questionLines &&
+    !isStatementBasedQuestion(questionLines) &&
+    !isAssertionReasonQuestion(questionLines) &&
+    !isTableBasedQuestion(questionLines) &&
+    !isChronologicalOrderQuestion(questionLines) &&
+    !isCorrectlyMatchedPairsQuestion(questionLines)
+  );
 
+  // ---- Question Rendering Logic ----
   const renderQuestion = (questionLines, mcq) => {
     if (!questionLines || !Array.isArray(questionLines) || !mcq) {
       return <p className="text-red-200">Error: Question content missing</p>;
@@ -552,80 +534,7 @@ const Battleground = () => {
         </div>
       );
     }
-
-    if (isStatementBasedQuestion(questionLines)) {
-      return (
-        <div className="mb-2">
-          {questionLines.map((line, index) => {
-            const isIntro = index === 0;
-            const isClosing = line.includes("How many of the above statements are correct?");
-            return (
-              <p key={index} className={`mb-1 ${isIntro || isClosing ? "text-cosmic-dark" : "text-ivory"}`}>
-                {line}
-              </p>
-            );
-          })}
-        </div>
-      );
-    }
-
-    if (isChronologicalOrderQuestion(questionLines)) {
-      const introLine = questionLines[0];
-      const closingLineIndex = questionLines.findIndex(line => line.includes("Select the correct order")) !== -1
-        ? questionLines.findIndex(line => line.includes("Select the correct order"))
-        : questionLines.length;
-      const items = questionLines.slice(1, closingLineIndex);
-      const closingLine = closingLineIndex < questionLines.length ? questionLines[closingLineIndex] : "Select the correct order:";
-
-      if (items.length !== 4) {
-        return <p className="text-red-200">Error: Incomplete chronological order question</p>;
-      }
-
-      return (
-        <div className="mb-2">
-          <p className="mb-1 text-ivory">{introLine}</p>
-          {items.map((item, index) => (
-            <p key={index} className="mb-1 text-ivory">{item}</p>
-          ))}
-          <p className="mb-1 text-ivory">{closingLine}</p>
-        </div>
-      );
-    }
-
-    if (isCorrectlyMatchedPairsQuestion(questionLines)) {
-      const introLine = questionLines[0];
-      const closingLineIndex = questionLines.findIndex(line => line.includes("Which of the pairs are correctly matched?"));
-      if (closingLineIndex === -1) {
-        return <p className="text-red-200">Error: Incomplete correctly matched pairs question</p>;
-      }
-      const pairs = questionLines.slice(1, closingLineIndex);
-      const closingLine = questionLines[closingLineIndex];
-
-      if (pairs.length < 3) {
-        return <p className="text-red-200">Error: Incomplete correctly matched pairs question</p>;
-      }
-
-      return (
-        <div className="mb-2">
-          <p className="mb-1 text-ivory">{introLine}</p>
-          {pairs.map((pair, index) => (
-            <p key={index} className="mb-1 text-ivory">{pair}</p>
-          ))}
-          <p className="mb-1 text-ivory">{closingLine}</p>
-        </div>
-      );
-    }
-
-    if (isDirectQuestion(questionLines)) {
-      return (
-        <div className="mb-2">
-        {questionLines.map((line, index) => (
-          <p key={index} className="mb-1 text-ivory">{line}</p>
-        ))}
-      </div>
-      );
-    }
-
+    
     return (
       <div className="mb-2">
         {questionLines.map((line, index) => (
@@ -635,8 +544,95 @@ const Battleground = () => {
     );
   };
 
-  const lastAttemptedIndex = userAnswers.slice().reverse().findIndex(ans => ans);
-  const lastActiveIndex = lastAttemptedIndex === -1 ? -1 : userAnswers.length - 1 - lastAttemptedIndex;
+  // --- Full-Screen Results Page ---
+  if (showResultsPage) {
+    const { totalQuestions, attempted, answeredCorrectly, answeredIncorrectly, unattempted, totalScore, percentage } = scoreDetails;
+    const passed = parseFloat(percentage) >= PRELIMS_CUTOFF;
+    const cutoffDifference = Math.abs(parseFloat(percentage) - PRELIMS_CUTOFF).toFixed(2);
+
+    return (
+      <div className="min-h-screen h-screen bg-gray-900 text-white font-poppins flex flex-col">
+        <header className="flex-shrink-0 flex justify-between items-center p-4 sm:p-6 bg-gray-900/80 backdrop-blur-sm z-10">
+          <button
+            onClick={() => setShowResultsPage(false)}
+            className="flex items-center gap-2 text-blue-400 hover:text-blue-300 font-semibold transition-colors duration-300"
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"></path></svg>
+            <span>Back to Solutions</span>
+          </button>
+          <button
+            onClick={handleGoBack}
+            className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-lg transition-transform transform hover:scale-105 duration-300"
+          >
+            Exit Battleground
+          </button>
+        </header>
+
+        <main className="flex-grow overflow-y-auto bg-gray-800">
+          <div className="bg-gray-800 p-6 sm:p-8 text-center">
+            <h1 className="text-3xl sm:text-4xl font-bold text-blue-400 mb-2">Test Complete!</h1>
+            <p className="text-gray-300 mb-4">Here's your performance summary.</p>
+            <div className={`p-4 rounded-lg mb-6 max-w-2xl mx-auto ${passed ? 'bg-green-900/50' : 'bg-red-900/50'}`}>
+              <p className="text-xl sm:text-2xl font-bold">{`Your Score: ${totalScore}`}</p>
+              <p className="text-lg text-gray-200">{`Percentage: ${percentage}%`}</p>
+              <p className={`mt-2 font-semibold ${passed ? 'text-green-400' : 'text-red-400'}`}>
+                {passed ? `🎉 Congratulations! You are above the prelims cutoff by ${cutoffDifference}%.` : `Below the prelims cutoff by ${cutoffDifference}%. Keep practicing!`}
+              </p>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 text-white max-w-4xl mx-auto">
+              <div className="bg-gray-700 p-3 rounded-lg">
+                <p className="text-2xl font-bold">{totalQuestions}</p><p className="text-sm text-gray-400">Total</p>
+              </div>
+              <div className="bg-gray-700 p-3 rounded-lg">
+                <p className="text-2xl font-bold">{attempted}</p><p className="text-sm text-gray-400">Attempted</p>
+              </div>
+              <div className="bg-green-700 p-3 rounded-lg">
+                <p className="text-2xl font-bold">{answeredCorrectly}</p><p className="text-sm text-green-200">Correct</p>
+              </div>
+              <div className="bg-red-700 p-3 rounded-lg">
+                <p className="text-2xl font-bold">{answeredIncorrectly}</p><p className="text-sm text-red-200">Incorrect</p>
+              </div>
+              <div className="bg-yellow-700 p-3 rounded-lg col-span-2 md:col-span-1">
+                <p className="text-2xl font-bold">{unattempted}</p><p className="text-sm text-yellow-200">Unattempted</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-gray-900 p-6 sm:p-8">
+            <div className="max-w-4xl mx-auto">
+              <h3 className="text-xl sm:text-2xl font-semibold text-gray-50 mb-4 text-center">
+                Leaderboard
+              </h3>
+              {leaderboard.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-zinc-300 text-sm sm:text-base">
+                    <thead>
+                      <tr className="border-b-2 border-gray-700">
+                        <th className="px-2 sm:px-4 py-2 text-blue-300">Rank</th>
+                        <th className="px-2 sm:px-4 py-2 text-blue-300">Username</th>
+                        <th className="px-2 sm:px-4 py-2 text-blue-300">Score</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {leaderboard.map((entry, index) => (
+                        <tr key={index} className={`border-b border-gray-700 ${user.username === entry.username ? 'bg-blue-900/50' : ''}`}>
+                          <td className="px-2 sm:px-4 py-3 font-bold">{index + 1}</td>
+                          <td className="px-2 sm:px-4 py-3">{entry.username}</td>
+                          <td className="px-2 sm:px-4 py-3">{entry.score}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-zinc-400 text-center text-sm sm:text-base">Leaderboard is currently empty.</p>
+              )}
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-900 text-white font-poppins overflow-hidden overscroll-none">
@@ -662,6 +658,45 @@ const Battleground = () => {
               border-radius: 8px;
               padding: 4px 12px;
               transition: all 0.3s ease;
+            }
+            .question-upbar {
+              background: rgba(31, 37, 47, 0.8);
+              backdrop-filter: blur(10px);
+              border-radius: 12px;
+              padding: 6px 12px;
+              display: flex;
+              align-items: center;
+              gap: 8px;
+              box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+              transition: transform 0.3s ease;
+            }
+            .question-upbar:hover {
+              transform: scale(1.05);
+            }
+            .question-upbar svg {
+              width: 16px;
+              height: 16px;
+            }
+            .question-upbar select {
+              background: rgba(55, 65, 81, 0.9);
+              color: white;
+              border: none;
+              border-radius: 8px;
+              padding: 4px 8px;
+              font-size: 0.875rem;
+              cursor: pointer;
+              outline: none;
+              appearance: none;
+              transition: background 0.3s ease;
+            }
+            .question-upbar select:hover {
+              background: rgba(75, 85, 99, 0.9);
+            }
+            @media (min-width: 640px) {
+              .question-upbar select {
+                font-size: 1rem;
+                padding: 6px 10px;
+              }
             }
           `}
         </style>
@@ -734,11 +769,11 @@ const Battleground = () => {
               {filter !== "all" && (
                 <div
                   className="fixed top-[4rem] left-0 w-full bg-gray-800 z-40 p-2 overflow-x-auto overflow-y-hidden flex space-x-2 items-center border-2 border-red-500"
-                  style={{ 
+                  style={{
                     height: '3rem',
-                    opacity: 1, 
-                    visibility: 'visible', 
-                    position: 'fixed' 
+                    opacity: 1,
+                    visibility: 'visible',
+                    position: 'fixed'
                   }}
                 >
                   {(() => {
@@ -759,10 +794,10 @@ const Battleground = () => {
                       const colorClass = isCurrent
                         ? "bg-gray-700"
                         : status === "correct"
-                        ? "bg-green-500"
-                        : status === "wrong"
-                        ? "bg-red-500"
-                        : "bg-white";
+                          ? "bg-green-500"
+                          : status === "wrong"
+                            ? "bg-red-500"
+                            : "bg-white";
                       return (
                         <div
                           key={actualIndex}
@@ -783,7 +818,7 @@ const Battleground = () => {
                 </div>
               )}
 
-              <div 
+              <div
                 className="fixed left-0 w-full z-60 px-3 sm:px-4 lg:px-6 question-box bg-gray-900"
                 style={{
                   top: '4rem',
@@ -801,7 +836,7 @@ const Battleground = () => {
                 </div>
               </div>
 
-              <div 
+              <div
                 className="absolute left-0 w-full bg-gray-900 z-20 px-2 sm:px-8 lg:px-6"
                 style={{
                   top: 'calc(4rem + (100dvh - 8rem) * 0.5)',
@@ -825,11 +860,11 @@ const Battleground = () => {
                         ? isUserAnswer && !isCorrectAnswer
                           ? "bg-red-600 border-red-500 text-white"
                           : isCorrectAnswer
-                          ? "bg-emerald-600 border-emerald-500 text-white"
-                          : "bg-gray-700 border-gray-600 text-zinc-300"
+                            ? "bg-emerald-600 border-emerald-500 text-white"
+                            : "bg-gray-700 border-gray-600 text-zinc-300"
                         : selectedOption === key
-                        ? "bg-orange-600 border-orange-400 text-white"
-                        : "bg-gray-700 border-gray-600 text-zinc-300 hover:bg-gray-600 hover:border-gray-500";
+                          ? "bg-orange-600 border-orange-400 text-white"
+                          : "bg-gray-700 border-gray-600 text-zinc-300 hover:bg-gray-600 hover:border-gray-500";
 
                       return (
                         <button
@@ -879,41 +914,45 @@ const Battleground = () => {
               >
                 Previous
               </button>
+
+              <div
+                className="fixed bottom-2.5 left-1/2 transform -translate-x-1/2 question-upbar z-50"
+              >
+                <svg
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  viewBox="0 0 24 24"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
+                </svg>
+                <select
+                  id="question-count-select"
+                  onChange={(e) => handleQuestionCountSelect(e.target.value)}
+                  className="text-gray-50"
+                >
+                  <option value="">Questions</option>
+                  <option value="25">25</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                </select>
+              </div>
+
               <button
-                onClick={handleNextQuestion}
-                disabled={currentQuestionIndex >= totalQuestions - 1 || score !== null || currentQuestionIndex >= questions.length - 1}
+                onClick={currentQuestionIndex === totalQuestions - 1 ? submitTest : handleNextQuestion}
+                disabled={score !== null}
                 className={`fixed bottom-2.5 right-2 px-6 py-1.5 text-sm sm:text-base rounded-full shadow-xl transition-transform transform hover:scale-105 duration-300 border border-white/10 z-50 ${
-                  currentQuestionIndex >= totalQuestions - 1 || score !== null || currentQuestionIndex >= questions.length - 1
+                  score !== null
                     ? "bg-gray-300 text-gray-400 cursor-not-allowed"
-                    : "bg-white text-black hover:bg-gray-100"
+                    : currentQuestionIndex === totalQuestions - 1
+                      ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                      : "bg-white text-black hover:bg-gray-100"
                 } focus:outline-none focus:ring-2 focus:ring-blue-400`}
                 style={{ boxShadow: "0 2px 16px rgba(0,0,0,0.18)" }}
               >
-                Next
+                {currentQuestionIndex === totalQuestions - 1 ? "Submit" : "Next"}
               </button>
-              <div className="fixed bottom-2.5 left-1/2 transform -translate-x-1/2 z-50 flex gap-4 pointer-events-auto">
-                {score !== null && (
-                  <button
-                    onClick={() => {
-                      setShowScorePopup(true);
-                      setIsScoreMinimized(false);
-                    }}
-                    className="px-6 py-1.5 text-sm sm:text-base rounded-full shadow-xl transition-transform transform hover:scale-105 duration-300 bg-black/40 backdrop-blur-md border border-white/10 text-white hover:bg-black/60 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                    style={{ boxShadow: "0 2px 16px rgba(0,0,0,0.18)" }}
-                  >
-                    Score
-                  </button>
-                )}
-                {currentQuestionIndex === totalQuestions - 1 && score === null && (
-                  <button
-                    onClick={submitTest}
-                    className="px-6 py-1.5 text-sm sm:text-base rounded-full shadow-xl transition-transform transform hover:scale-105 duration-300 bg-black/40 backdrop-blur-md border border-white/10 text-white hover:bg-black/60 focus:outline-none focus:ring-2 focus:ring-blue-400"
-                    style={{ boxShadow: "0 2px 16px rgba(0,0,0,0.18)" }}
-                  >
-                    Submit Test
-                  </button>
-                )}
-              </div>
             </>
           ) : testStarted && questions.length > 0 ? (
             <div className="p-4 bg-red-600 border border-gray-700 rounded-lg mx-auto max-w-sm sm:max-w-md text-center">
@@ -955,118 +994,19 @@ const Battleground = () => {
           </div>
         </div>
       )}
-
-      {showScorePopup && (
-        <div className="fixed top-16 left-0 right-0 bottom-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-gray-800 p-4 sm:p-6 rounded-lg shadow-lg max-w-sm sm:max-w-md w-full mx-4">
-            <h2 className="text-lg sm:text-xl font-bold text-blue-400 mb-4">Test Results</h2>
-            <div className="text-white text-sm sm:text-base space-y-2">
-              <p>Total Questions: {scoreDetails.totalQuestions}</p>
-              <p>Attempted: {scoreDetails.attempted}</p>
-              <p>Correct: {scoreDetails.answeredCorrectly}</p>
-              <p>Wrong: {scoreDetails.answeredIncorrectly}</p>
-              <p>Unattempted: {scoreDetails.unattempted}</p>
-              <p>Total Score: {scoreDetails.totalScore} / {scoreDetails.totalQuestions * 2}</p>
-              <p>Percentage: {scoreDetails.percentage}%</p>
-              <p className={scoreDetails.percentage >= PRELIMS_CUTOFF ? "text-green-400" : "text-red-400"}>
-                {scoreDetails.percentage >= PRELIMS_CUTOFF
-                  ? `Above prelims cutoff by ${(scoreDetails.percentage - PRELIMS_CUTOFF).toFixed(2)}%`
-                  : `Below prelims cutoff by ${(PRELIMS_CUTOFF - scoreDetails.percentage).toFixed(2)}%`}
-              </p>
-            </div>
-            <div className="flex flex-col sm:flex-row gap-2 mt-4">
-              <button
-                onClick={() => {
-                  setShowScorePopup(false);
-                  setIsScoreMinimized(true);
-                }}
-                className="bg-gray-600 text-white px-4 py-1.5 text-sm sm:text-base rounded-md hover:bg-gray-700 transition-transform transform hover:scale-105 duration-300"
-              >
-                Hide
-              </button>
-              <button
-                onClick={() => resetTest(totalQuestions)}
-                className="bg-purple-600 text-white px-4 py-1.5 text-sm sm:text-base rounded-md hover:bg-purple-700 transition-transform transform hover:scale-105 duration-300"
-              >
-                New Test
-              </button>
-              <button
-                onClick={() => {
-                  setShowScorePopup(false);
-                  setShowLeaderboardPopup(true);
-                }}
-                className="bg-blue-600 text-white px-4 py-1.5 text-sm sm:text-base rounded-md hover:bg-blue-700 transition-transform transform hover:scale-105 duration-300"
-              >
-                Leaderboard
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showLeaderboardPopup && (
-        <div className="fixed top-16 left-0 right-0 bottom-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-gray-800 rounded-lg shadow-md p-4 sm:p-6 mx-4 max-w-sm sm:max-w-2xl w-full">
-            <h3 className="text-lg sm:text-2xl font-semibold text-gray-50 mb-4 text-center">
-              Leaderboard Rankings
-            </h3>
-            {leaderboard.length > 0 ? (
-              <div className="overflow-y-auto max-h-80 sm:max-h-96">
-                <table className="w-full text-left text-zinc-300 text-sm sm:text-base">
-                  <thead>
-                    <tr className="border-b border-gray-600">
-                      <th className="px-2 sm:px-4 py-1 sm:py-2">Position</th>
-                      <th className="px-2 sm:px-4 py-1 sm:py-2">Username</th>
-                      <th className="px-2 sm:px-4 py-1 sm:py-2">Score</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {leaderboard.map((entry, index) => {
-                      const position = index === 0 ? "1st" : index === 1 ? "2nd" : index === 2 ? "3rd" : `${index + 1}th`;
-                      return (
-                        <tr key={index} className="border-b border-gray-700">
-                          <td className="px-2 sm:px-4 py-1 sm:py-2">{position}</td>
-                          <td className="px-2 sm:px-4 py-1 sm:py-2">{entry.username}</td>
-                          <td className="px-2 sm:px-4 py-1 sm:py-2">{entry.score}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="text-zinc-300 text-center text-sm sm:text-base">No rankings available yet.</p>
-            )}
-            <div className="flex justify-center mt-4 sm:mt-6">
-              <button
-                onClick={() => {
-                  setShowLeaderboardPopup(false);
-                  setShowScorePopup(true);
-                }}
-                className="bg-gray-600 text-white px-4 py-1.5 text-sm sm:text-base rounded-full shadow-lg hover:bg-gray-700 transition-transform transform hover:scale-105 duration-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
-              >
-                Back
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
+      
       {testStarted && (
         <div
           className="fixed top-16 right-0 h-[calc(100vh-4rem)] w-64 sm:w-72 bg-gray-800 shadow-lg z-[9999] transition-all duration-300 ease-in-out"
           style={{ right: showSidebar ? "0" : "-288px" }}
         >
           <div className="p-4 sm:p-6 h-full flex flex-col relative">
-            {isScoreMinimized && (
+            {score !== null && (
               <button
-                onClick={() => {
-                  setIsScoreMinimized(false);
-                  setShowScorePopup(true);
-                }}
+                onClick={() => setShowResultsPage(true)}
                 className="bg-blue-600 text-white px-3 py-1.5 text-sm sm:text-base rounded-md hover:bg-blue-700 transition-transform duration-300 mb-4"
               >
-                Score
+                View Results
               </button>
             )}
             <div className="mb-4 z-10">
@@ -1098,13 +1038,17 @@ const Battleground = () => {
                     ? status === "correct"
                       ? "bg-green-500"
                       : status === "wrong"
-                      ? "bg-red-500"
-                      : "bg-white"
+                        ? "bg-red-500"
+                        : "bg-white"
                     : actualIndex <= maxQuestionReached
-                    ? userAnswers[actualIndex]
-                      ? "bg-blue-200"
-                      : "bg-white"
-                    : "bg-gray-200";
+                      ? userAnswers[actualIndex]
+                        ? "bg-blue-200"
+                        : "bg-white"
+                      : "bg-gray-200";
+                  
+                  if (isCurrent && score !== null) {
+                    colorClass = `${colorClass} ring-2 ring-white`;
+                  }
 
                   return (
                     <div
@@ -1122,21 +1066,6 @@ const Battleground = () => {
                     </div>
                   );
                 })}
-              </div>
-              <div className="mt-4">
-                <label className="block text-xs sm:text-sm font-semibold text-blue-300 mb-1" htmlFor="question-count-select">
-                  Select Number of Questions
-                </label>
-                <select
-                  id="question-count-select"
-                  onChange={(e) => handleQuestionCountSelect(e.target.value)}
-                  className="w-full text-gray-900 bg-gray-700 px-4 py-1.5 text-sm sm:text-base rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 transition-all duration-200"
-                >
-                  <option value="">Select Option</option>
-                  <option value="25">25 Questions</option>
-                  <option value="50">50 Questions</option>
-                  <option value="100">100 Questions</option>
-                </select>
               </div>
               {score === null && (
                 <button

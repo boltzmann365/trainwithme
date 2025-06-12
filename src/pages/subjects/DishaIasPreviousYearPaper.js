@@ -107,7 +107,7 @@ const DishaIasPreviousYearPaper = () => {
     }
   }, [questions, currentQuestionIndex]);
 
-  const API_URL = "https://trainwithme-backend.onrender.com";
+  const API_URL = "https://new-backend-tx3z.onrender.com";
   const LAW_MODE_BATCH_SIZE = 100;
 
   const fetchUserMCQs = async () => {
