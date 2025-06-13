@@ -289,26 +289,19 @@ const ArticleProvider = ({ children }) => {
   );
 };
 
-// ===================================================================
-// START OF MODIFIED SECTION 1: AuthProvider
-// ===================================================================
 const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const API_URL = "https://new-backend-tx3z.onrender.com"; // Your backend URL
 
-  const areUsersEqual = (prevUser, newUser) => {
-    if (prevUser === newUser) return true;
-    if (!prevUser || !newUser) return false;
-    return prevUser.email === newUser.email && prevUser.googleId === newUser.googleId && prevUser.username === newUser.username;
-  };
-
+  // Load user from localStorage on initial app load
   useEffect(() => {
     const savedUser = localStorage.getItem("user");
     if (savedUser) {
-      const parsedUser = JSON.parse(savedUser);
-      setUser(parsedUser);
+      setUser(JSON.parse(savedUser));
     }
   }, []);
 
+  // Save user to localStorage whenever it changes
   useEffect(() => {
     if (user) {
       localStorage.setItem("user", JSON.stringify(user));
@@ -317,99 +310,78 @@ const AuthProvider = ({ children }) => {
     }
   }, [user]);
 
-  const saveUserToServer = async (email, username, setError) => {
+  const loginOrSignupWithGoogle = async (token) => {
+    const jwtDecode = (t) => {
+      const base64Url = t.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      return JSON.parse(window.atob(base64));
+    };
+    const decoded = jwtDecode(token);
+    const { email, sub: googleId } = decoded;
+
     try {
-      const response = await fetch("https://new-backend-tx3z.onrender.com/save-user", { // Corrected backend URL
+      const response = await fetch(`${API_URL}/user/get-profile?email=${email}`);
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log("Existing user found in DB:", data.user.username);
+        const existingUser = { email, googleId, username: data.user.username };
+        setUser(existingUser);
+        return { isNewUser: false };
+
+      } else if (response.status === 404) {
+        console.log("New user detected. Prompting for username.");
+        const newUser = { email, googleId, username: null };
+        setUser(newUser);
+        return { isNewUser: true };
+
+      } else {
+        throw new Error(`Server error: ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error("Error during login/signup process:", error);
+      return { error: error.message };
+    }
+  };
+
+  const setUsername = async (username, setError) => {
+    if (!user) return;
+    
+    const updatedUser = { ...user, username };
+    setUser(updatedUser);
+
+    try {
+      const response = await fetch(`${API_URL}/save-user`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, username }),
+        body: JSON.stringify({ email: user.email, username }),
       });
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || `${response.statusText}`);
+        throw new Error(errorData.error || 'Failed to save username');
       }
-      await response.json();
-      return true;
-    } catch (error) {
-      console.error("Error saving user to server:", error.message);
-      if (setError) setError(error.message);
-      return false;
-    }
-  };
-
-  // MODIFIED FUNCTION: It now accepts the token string directly
-  const signupWithGoogle = (token) => {
-    const jwtDecode = (t) => {
-      const base64Url = t.split(".")[1];
-      const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
-      return JSON.parse(window.atob(base64));
-    };
-    const decoded = jwtDecode(token); // Use the token directly
-    const email = decoded.email;
-    const googleId = decoded.sub;
-    const userProfiles = JSON.parse(localStorage.getItem("userProfiles") || "{}");
-    const existingUsername = userProfiles[email];
-    const newUser = { email, googleId, username: existingUsername || null };
-    if (!areUsersEqual(user, newUser)) {
-      setUser(newUser);
-    }
-    // This now correctly returns true if the user is new (needs a username)
-    return !existingUsername;
-  };
-
-  const setUsername = (username, setError) => {
-    setUser((prev) => {
-      const updatedUser = { ...prev, username };
       const userProfiles = JSON.parse(localStorage.getItem("userProfiles") || "{}");
-      userProfiles[prev.email] = username;
+      userProfiles[user.email] = username;
       localStorage.setItem("userProfiles", JSON.stringify(userProfiles));
-      saveUserToServer(prev.email, username, setError);
-      return updatedUser;
-    });
-  };
-
-  const loginWithGoogle = (credentialResponse) => {
-    // This function can be simplified now, but we'll leave it for compatibility
-    // The main flow is handled by signupWithGoogle now
-    const jwtDecode = (token) => {
-      const base64Url = token.split(".")[1];
-      const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
-      return JSON.parse(window.atob(base64));
-    };
-    const decoded = jwtDecode(credentialResponse.credential);
-    const email = decoded.email;
-    const googleId = decoded.sub;
-    const savedUser = JSON.parse(localStorage.getItem("user"));
-    const userProfiles = JSON.parse(localStorage.getItem("userProfiles") || "{}");
-    const existingUsername = userProfiles[email];
-    if (savedUser && savedUser.googleId === googleId) {
-      const updatedUser = { ...savedUser, username: existingUsername || savedUser.username };
-      if (!areUsersEqual(user, updatedUser)) {
-        setUser(updatedUser);
-      }
-      saveUserToServer(email, updatedUser.username);
-      return true;
-    } else {
-      // This part now correctly calls the modified signup function
-      signupWithGoogle(credentialResponse.credential); 
-      return false;
+    } catch (error) {
+       console.error("Error saving username:", error);
+       if(setError) setError(error.message);
+       setUser(prev => ({...prev, username: null}));
     }
   };
 
   const logout = () => {
     setUser(null);
     localStorage.removeItem("user");
+    localStorage.removeItem("userProfiles");
   };
 
   return (
-    <AuthContext.Provider value={{ user, signupWithGoogle, setUsername, loginWithGoogle, logout }}>
+    <AuthContext.Provider value={{ user, loginOrSignupWithGoogle, setUsername, logout }}>
       {children}
     </AuthContext.Provider>
   );
 };
-// ===================================================================
-// END OF MODIFIED SECTION 1
-// ===================================================================
 
 
 function App() {
@@ -458,78 +430,76 @@ function App() {
   );
 }
 
-// ===================================================================
-// START OF MODIFIED SECTION 2: LoginSignup Component
-// ===================================================================
 const LoginSignup = () => {
-  const { user, signupWithGoogle, setUsername } = useAuth(); // Removed unused loginWithGoogle
+  const { user, loginOrSignupWithGoogle, setUsername } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [usernameInput, setUsernameInputState] = useState(""); // Renamed to avoid conflict
+  const [usernameInput, setUsernameInputState] = useState("");
   const [error, setError] = useState("");
 
   const from = location.state?.from || "/upsc-prelims";
 
-  // This function handles success from the WEB version's GoogleLogin component
-  const handleWebGoogleSuccess = (credentialResponse) => {
-    const token = credentialResponse.credential;
-    const isNewUser = signupWithGoogle(token);
-    if (!isNewUser) {
-      navigate(from, { replace: true });
+  const handleTokenReceived = async (token) => {
+    if (!token) {
+      setError("Received an empty token. Please try again.");
+      return;
     }
-  };
-  
-  // This function handles success from the NATIVE Android app
-  const handleNativeGoogleSuccess = (token) => {
-    const isNewUser = signupWithGoogle(token);
-    if (!isNewUser) {
+    setError("");
+    const result = await loginOrSignupWithGoogle(token);
+
+    if (result.error) {
+      setError(result.error);
+    } else if (!result.isNewUser) {
       navigate(from, { replace: true });
     }
   };
 
+  const handleWebGoogleSuccess = (credentialResponse) => {
+    handleTokenReceived(credentialResponse.credential);
+  };
+  
   const handleGoogleFailure = () => {
     setError("Google authentication failed. Please try again.");
   };
 
-  // This `useEffect` listens for the custom event from our native Android "bridge"
   useEffect(() => {
-    const handleNativeToken = (event) => {
+    const handleNativeTokenEvent = (event) => {
       const { token } = event.detail;
       if (token) {
-        handleNativeGoogleSuccess(token);
+        console.log("Received token from native app.");
+        handleTokenReceived(token);
       }
     };
-    window.addEventListener('google-sign-in-success', handleNativeToken);
+    window.addEventListener('google-sign-in-success', handleNativeTokenEvent);
     
-    // Cleanup the event listener when the component unmounts
     return () => {
-      window.removeEventListener('google-sign-in-success', handleNativeToken);
+      window.removeEventListener('google-sign-in-success', handleNativeTokenEvent);
     };
-  }, []); // The empty array ensures this runs only once
+  }, []);
 
   const handleUsernameSubmit = async (e) => {
     e.preventDefault();
-    setUsername(usernameInput, setError);
+    await setUsername(usernameInput, setError);
     navigate(from, { replace: true });
   };
 
-  // The new button for the Android app
   const NativeGoogleButton = () => (
     <button
       onClick={() => {
         if (window.AndroidBridge && typeof window.AndroidBridge.performGoogleSignIn === 'function') {
+          console.log("Calling native performGoogleSignIn...");
           window.AndroidBridge.performGoogleSignIn();
         } else {
-          setError("Cannot find native sign-in function.");
+          setError("This app is not running in the correct mobile environment.");
+          console.error("window.AndroidBridge.performGoogleSignIn not found!");
         }
       }}
-      className="w-full bg-blue-600 p-2 rounded hover:bg-blue-700 transition-colors duration-300 text-white"
+      className="w-full bg-blue-600 p-3 rounded-lg hover:bg-blue-700 transition-colors duration-300 text-white font-semibold"
     >
       Continue with Google
     </button>
   );
 
-  // Your original GoogleLogin component for the web browser
   const WebGoogleButton = () => (
     <GoogleLogin
       onSuccess={handleWebGoogleSuccess}
@@ -537,8 +507,6 @@ const LoginSignup = () => {
     />
   );
 
-  // RENDER LOGIC:
-  // If the user is new and needs to set a username, show the username form.
   if (user && !user.username) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">
@@ -561,23 +529,16 @@ const LoginSignup = () => {
     );
   }
 
-  // Otherwise, show the main Login/Sign Up page.
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">
       <div className="bg-gray-800 p-6 rounded-lg text-center">
         <h2 className="text-2xl mb-4">Login or Sign Up</h2>
         {error && <p className="text-red-400 mb-4">{error}</p>}
         
-        {/* This is the key: Check if we are inside the app.
-            If window.AndroidBridge exists, show the native button.
-            Otherwise, show the standard web button. */}
         {window.AndroidBridge ? <NativeGoogleButton /> : <WebGoogleButton />}
       </div>
     </div>
   );
 };
-// ===================================================================
-// END OF MODIFIED SECTION 2
-// ===================================================================
 
 export default App;
