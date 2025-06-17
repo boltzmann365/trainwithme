@@ -14,7 +14,7 @@ const History = () => {
   const TOPICS = [
     { name: "Tamilnadu History", path: "/history/tamilnadu", image: tamilnaduHistoryImage },
     { name: "Spectrum", path: "/history/spectrum", image: spectrumImage },
-    { name: "Art and Culture", path: "/history/art-and-culture", image: artAndCultureImage },
+    { name: "Art and Culture", path: "/history/artandculture", image: artAndCultureImage },
   ];
 
   const handleGoBack = () => {

@@ -1,22 +1,16 @@
-import React, { useState, useEffect, useRef, useContext } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
-// Make sure the path to your App.js file is correct to import the context
-import { useArticles } from '../../App'; 
-
+import { useAuth } from '../../App'; 
 
 const NewsCard = () => {
-    // 1. Consume the prefetched articles and their loading state from the global context.
-    const { articles: prefetchedArticles, isArticlesFetching: isPrefetching, articlesError: prefetchError } = useArticles();
-
-    // 2. Local state for all articles, initialized with prefetched data.
-    const [articles, setArticles] = useState(prefetchedArticles || []);
-    // 3. Loading state for fetching *more* articles (infinite scroll), not the initial load.
-    const [loading, setLoading] = useState(false);
+    const { user } = useAuth();
+    const [articles, setArticles] = useState([]);
+    const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    // 4. Page state starts at 2 because page 1 is already prefetched.
-    const [page, setPage] = useState(2);
+    const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(true);
+    
     const [selectedArticle, setSelectedArticle] = useState(null);
     const [suggestionIndex, setSuggestionIndex] = useState(0);
     const [suggestedArticles, setSuggestedArticles] = useState([]);
@@ -35,125 +29,69 @@ const NewsCard = () => {
     const isDragging = useRef(false);
     const navigate = useNavigate();
 
-    const API_URL = process.env.REACT_APP_API_URL || 'https://new-backend-tx3z.onrender.com';
+    const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
 
-    // 5. This effect handles fetching *more* articles for the infinite scroll.
-    // It is triggered when the `page` state changes (and is greater than 1).
-    useEffect(() => {
-        // We don't fetch for page 1, as that's handled by the prefetch logic.
-        if (page === 1) return;
-        if (!hasMore) return;
+    const debounce = (func, delay) => {
+        let timeoutId;
+        return (...args) => {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => func(...args), delay);
+        };
+    };
 
-        const fetchMoreArticles = async () => {
-            setLoading(true);
-            setError(null);
+    // ========================================================
+    // START: MODIFICATION FOR SUGGESTION SORTING & REFRESH LOGIC
+    // ========================================================
+
+    // 1. Helper function to sort articles by seenCount (ascending), then by newest date.
+    const sortArticlesBySeenCount = (articleArray) => {
+        return [...articleArray].sort((a, b) => {
+            const seenA = a.seenCount || 0;
+            const seenB = b.seenCount || 0;
+            if (seenA !== seenB) {
+                return seenA - seenB;
+            }
+            return new Date(b.date) - new Date(a.date);
+        });
+    };
+
+    // This function resets the state to trigger a fresh fetch from page 1.
+    const refreshArticles = () => {
+        if (loading) return;
+        setPage(1);
+        setArticles([]); // Clearing articles will show the main loader
+        setHasMore(true);
+    };
+
+    const handleCardClick = async (article) => {
+        let currentArticles = articles;
+        if (user?.email) {
             try {
-                const thirtyDaysAgo = new Date();
-                thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-                const response = await axios.get(`${API_URL}/admin/get-current-affairs-articles`, {
-                    params: { startDate: thirtyDaysAgo.toISOString().split('T')[0], page, limit },
+                await axios.post(`${API_URL}/user/mark-article-seen`, {
+                    userId: user.email,
+                    articleId: article._id
                 });
-                const newArticles = response.data.articles || [];
-                // Append the newly fetched articles to the existing list.
-                setArticles((prev) => [...prev, ...newArticles]);
-                setHasMore(newArticles.length === limit);
+                console.log(`NewsCard: Marked article as seen: userId=${user.email}, articleId=${article._id}`);
+                // Optimistically update the seen count in the local state
+                currentArticles = articles.map(a => 
+                    a._id === article._id ? { ...a, seenCount: (a.seenCount || 0) + 1 } : a
+                );
+                setArticles(currentArticles);
             } catch (err) {
-                console.error('NewsCard: Error fetching more articles:', err.message);
-                const errorMessage = err.response 
-                    ? `Failed to load articles: ${err.response.data?.error || 'Server error'} (Status: ${err.response.status})`
-                    : err.request 
-                    ? 'Failed to load articles: Network error, possibly due to server unavailability.'
-                    : 'Failed to load articles: An unexpected error occurred.';
-                setError(errorMessage);
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchMoreArticles();
-    }, [page, hasMore]); // Depends on the page number to fetch new data.
-
-    // 6. This effect handles the infinite scroll trigger.
-    useEffect(() => {
-        const handleScroll = () => {
-            if (scrollContainerRef.current && hasMore && !loading) {
-                const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-                // When the user scrolls near the bottom, increment the page to fetch more articles.
-                if (scrollTop + clientHeight >= scrollHeight - 20) {
-                    setPage((prev) => prev + 1);
-                }
-            }
-        };
-        const container = scrollContainerRef.current;
-        if (container) {
-            container.addEventListener('scroll', handleScroll);
-            return () => container.removeEventListener('scroll', handleScroll);
-        }
-    }, [hasMore, loading]);
-
-    // ... after the useEffect that handles infinite scroll trigger
-
-useEffect(() => {
-    const handleModalScroll = () => {
-        if (modalScrollRef.current) {
-            // If scrolled more than 50px, set isScrolled to true
-            if (modalScrollRef.current.scrollTop > 10) {
-                setIsScrolled(true);
-            } else {
-                setIsScrolled(false);
+                console.error('NewsCard: Error marking article as seen:', err.message);
             }
         }
-    };
 
-    const scrollableModal = modalScrollRef.current;
-    if (scrollableModal) {
-        scrollableModal.addEventListener('scroll', handleModalScroll);
-    }
-
-    // Cleanup: remove the event listener when the component unmounts or article changes
-    return () => {
-        if (scrollableModal) {
-            scrollableModal.removeEventListener('scroll', handleModalScroll);
-        }
-    };
-}, [selectedArticle]); // Rerun this effect when the selected article changes
-
-    useEffect(() => {
-        if (selectedArticle && modalScrollRef.current && suggestedSectionRef.current) {
-            const modal = modalScrollRef.current;
-            if (window.innerWidth >= 640) {
-                const suggested = suggestedSectionRef.current;
-                const offset = 40;
-                const scrollPosition = suggested.offsetTop - modal.clientHeight + offset;
-                modal.scrollTop = scrollPosition > 0 ? scrollPosition : 0;
-            } else {
-                modal.scrollTop = 0;
-            }
-        }
-    }, [selectedArticle]);
-
-    useEffect(() => {
-        if (selectedArticle) {
-            document.body.style.overflow = 'hidden';
-        } else {
-            document.body.style.overflow = 'auto';
-        }
-        return () => {
-            document.body.style.overflow = 'auto';
-        };
-    }, [selectedArticle]);
-
-    const handleGoBack = () => {
-        navigate('/upsc-prelims');
-    };
-
-    const handleCardClick = (article) => {
         setSelectedArticle(article);
-        setArticleHistory([article]); 
+        setArticleHistory(prev => [...prev, article]);
         setSuggestionIndex(0);
         setIsScrolled(false);
-        const filtered = articles.filter((a) => a._id !== article._id);
-        const initialSuggestions = filtered.slice(0, 3);
+        
+        // 2. Generate initial suggestions from the updated and sorted list.
+        const potentialSuggestions = currentArticles.filter((a) => a._id !== article._id);
+        const sortedSuggestions = sortArticlesBySeenCount(potentialSuggestions);
+        const initialSuggestions = sortedSuggestions.slice(0, 3);
+
         setSuggestedArticles(initialSuggestions);
         setDisplayedArticleIds(new Set([article._id, ...initialSuggestions.map(a => a._id)]));
     };
@@ -166,33 +104,32 @@ useEffect(() => {
                 if (modalRef.current) {
                     modalRef.current.style.transform = 'translateY(0)';
                 }
+                // 3. Refresh the entire list when the modal closes.
+                refreshArticles(); 
             }, 300);
         } else {
             setSelectedArticle(null);
+            refreshArticles();
         }
         setDisplayedArticleIds(new Set());
-    };
-
-    const getSuggestedArticles = () => {
-        if (!selectedArticle || articles.length <= 1) return [];
-        if (window.innerWidth < 640) {
-            return articles.filter((a) => a._id !== selectedArticle._id);
-        }
-        return suggestedArticles;
     };
 
     const handleNextSuggestions = () => {
         if (window.innerWidth < 640) {
             const filtered = articles.filter((a) => a._id !== selectedArticle._id);
-            setSuggestionIndex((prev) => (prev + 1 >= filtered.length ? 0 : prev + 1));
+            const sorted = sortArticlesBySeenCount(filtered);
+            setSuggestionIndex((prev) => (prev + 1 >= sorted.length ? 0 : prev + 1));
             if (suggestionScrollRef.current) {
                 suggestionScrollRef.current.scrollBy({ left: 200, behavior: 'smooth' });
             }
         } else {
-            const filtered = articles.filter((a) => !displayedArticleIds.has(a._id));
+            // 4. When cycling suggestions, find the next best one from a sorted list.
+            const potentialNext = articles.filter((a) => !displayedArticleIds.has(a._id));
+            const sortedPotentialNext = sortArticlesBySeenCount(potentialNext);
+
             setSuggestedArticles((prev) => {
                 const newArticles = [...prev.slice(1)];
-                const nextArticle = filtered.length > 0 ? filtered[0] : null;
+                const nextArticle = sortedPotentialNext.length > 0 ? sortedPotentialNext[0] : null;
                 if (nextArticle) {
                     newArticles.push(nextArticle);
                     setDisplayedArticleIds((prevSet) => new Set([...prevSet, nextArticle._id]));
@@ -202,6 +139,115 @@ useEffect(() => {
         }
     };
 
+    // ========================================================
+    // END: MODIFICATION FOR SUGGESTION SORTING & REFRESH LOGIC
+    // ========================================================
+    
+    // The rest of the component logic remains the same.
+    useEffect(() => {
+        if (!hasMore && page > 1) return;
+
+        const fetchArticles = async () => {
+            setLoading(true);
+            setError(null);
+            try {
+                const thirtyDaysAgo = new Date();
+                thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                const params = { 
+                    startDate: thirtyDaysAgo.toISOString().split('T')[0], 
+                    page, 
+                    limit,
+                    userId: user.email
+                };
+                const response = await axios.get(`${API_URL}/admin/get-current-affairs-articles`, { params });
+                const newArticles = response.data.articles || [];
+                
+                setArticles(prev => page === 1 ? newArticles : [...prev, ...newArticles.filter(na => !prev.some(pa => pa._id === na._id))]);
+                setHasMore(newArticles.length === limit);
+            } catch (err) {
+                console.error('NewsCard: Error fetching articles:', err.message);
+                setError('Failed to load articles. Please try again later.');
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        if (user?.email) {
+            fetchArticles();
+        } else {
+            setLoading(false);
+            setError("Please log in to view articles.");
+        }
+    }, [page, user]); 
+    
+    useEffect(() => {
+        const handleScroll = debounce(() => {
+            if (scrollContainerRef.current && hasMore && !loading) {
+                const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+                if (scrollTop + clientHeight >= scrollHeight - 100) {
+                    setPage(prev => prev + 1);
+                }
+            }
+        }, 200);
+
+        const container = scrollContainerRef.current;
+        if (container) {
+            container.addEventListener('scroll', handleScroll);
+            return () => container.removeEventListener('scroll', handleScroll);
+        }
+    }, [hasMore, loading]);
+
+    useEffect(() => {
+        if (loading || !hasMore) return;
+
+        const container = scrollContainerRef.current;
+        if (container) {
+            const isScrollable = container.scrollHeight > container.clientHeight;
+            if (!isScrollable) {
+                setPage(prevPage => prevPage + 1);
+            }
+        }
+    }, [articles, loading, hasMore]);
+    
+    useEffect(() => {
+        const handleModalScroll = () => {
+            if (modalScrollRef.current) {
+                setIsScrolled(modalScrollRef.current.scrollTop > 10);
+            }
+        };
+
+        const scrollableModal = modalScrollRef.current;
+        if (scrollableModal) {
+            scrollableModal.addEventListener('scroll', handleModalScroll);
+            return () => scrollableModal.removeEventListener('scroll', handleModalScroll);
+        }
+    }, [selectedArticle]);
+
+    useEffect(() => {
+        if (selectedArticle) {
+            document.body.style.overflow = 'hidden';
+            if (modalScrollRef.current) modalScrollRef.current.scrollTop = 0;
+        } else {
+            document.body.style.overflow = 'auto';
+        }
+        return () => {
+            document.body.style.overflow = 'auto';
+        };
+    }, [selectedArticle]);
+
+    const handleGoBack = () => {
+        navigate('/upsc-prelims');
+    };
+
+    const getSuggestedArticles = () => {
+        if (!selectedArticle || articles.length <= 1) return [];
+        if (window.innerWidth < 640) {
+            const potential = articles.filter((a) => a._id !== selectedArticle._id);
+            return sortArticlesBySeenCount(potential);
+        }
+        return suggestedArticles;
+    };
+    
     const handlePrevSuggestions = () => {
         if (window.innerWidth < 640) {
             const filtered = articles.filter((a) => a._id !== selectedArticle._id);
@@ -210,11 +256,13 @@ useEffect(() => {
                 suggestionScrollRef.current.scrollBy({ left: -200, behavior: 'smooth' });
             }
         } else {
+            // This logic could be improved, but for now it's kept as is.
             const currentSuggestionIds = new Set(suggestedArticles.map(a => a._id));
             const availableArticles = articles.filter(a => !currentSuggestionIds.has(a._id) && a._id !== selectedArticle._id);
+            const sortedAvailable = sortArticlesBySeenCount(availableArticles);
             setSuggestedArticles((prev) => {
                 const newArticles = [...prev.slice(0, -1)];
-                const prevArticle = availableArticles.length > 0 ? availableArticles[availableArticles.length - 1] : null;
+                const prevArticle = sortedAvailable.length > 0 ? sortedAvailable[sortedAvailable.length - 1] : null;
                 if (prevArticle) {
                     newArticles.unshift(prevArticle);
                 }
@@ -223,51 +271,28 @@ useEffect(() => {
         }
     };
     
-    const handleMainNextArticle = () => {
+    const handleMainNextArticle = async () => {
         const suggested = getSuggestedArticles();
         if (suggested.length === 0) return;
         const nextArticle = suggested[0];
         if (!nextArticle) return;
-        setSelectedArticle(nextArticle);
-        setArticleHistory(prev => [...prev, nextArticle]);
-        setIsScrolled(false);
 
-        if (window.innerWidth >= 640) {
-            const newDisplayedIds = new Set(displayedArticleIds);
-            newDisplayedIds.add(nextArticle._id);
-            const filtered = articles.filter((a) => !newDisplayedIds.has(a._id));
-
-            setSuggestedArticles((prev) => {
-                const newArticles = [...prev.slice(1)];
-                const newSuggestion = filtered.length > 0 ? filtered[0] : null;
-                if (newSuggestion) {
-                    newArticles.push(newSuggestion);
-                    newDisplayedIds.add(newSuggestion._id);
-                }
-                setDisplayedArticleIds(newDisplayedIds);
-                return newArticles.filter(a => a);
-            });
-        } else {
-            const filtered = articles.filter((a) => a._id !== nextArticle._id);
-            setSuggestedArticles(filtered.slice(0, 3));
-            setDisplayedArticleIds(new Set([nextArticle._id, ...filtered.slice(0, 3).map(a => a._id)]));
-            setSuggestionIndex(0);
-        }
+        // This will now call the handleCardClick logic to ensure sorting and state updates are consistent
+        handleCardClick(nextArticle);
     };
-    const handleMainPrevArticle = () => {
-    // Ensure there is a history to go back to
-    if (articleHistory.length <= 1) return;
 
-    // Create a new history array without the last (current) article
-    const newHistory = articleHistory.slice(0, -1);
+    const handleMainPrevArticle = async () => {
+        if (articleHistory.length <= 1) return;
 
-    // The previous article is now the last one in the new history array
-    const prevArticle = newHistory[newHistory.length - 1];
-    
-    setSelectedArticle(prevArticle);
-    setArticleHistory(newHistory); // Update the history state
-    setIsScrolled(false); // Reset scroll effect
-};
+        // Pop the current article from history to get the previous one
+        const newHistory = articleHistory.slice(0, -1);
+        const prevArticle = newHistory[newHistory.length - 1];
+
+        // This replaces the previous logic with a cleaner state update
+        setSelectedArticle(prevArticle);
+        setArticleHistory(newHistory);
+        setIsScrolled(false);
+    };
 
     const handleTouchStart = (e) => {
         if (window.innerWidth >= 640) return;
@@ -306,22 +331,26 @@ useEffect(() => {
         }
         isDragging.current = false;
     };
-
-    // 7. Show a loading screen only while the initial prefetch is happening.
-    if (isPrefetching) {
-        return <div className="text-center text-gray-400 py-10">Loading articles...</div>;
+    
+    if (loading && page === 1) {
+        return (
+            <div className="h-screen w-full flex items-center justify-center bg-gray-900">
+                <span className="inline-block w-12 h-12 border-4 border-blue-400 border-t-transparent rounded-full animate-spin"></span>
+            </div>
+        );
     }
 
-    // Show an error if the prefetch failed.
-    if (prefetchError) {
-        return <div className="text-center text-red-400 py-10">{prefetchError}</div>;
+    if (error) {
+        return (
+            <div className="h-screen w-full flex flex-col items-center justify-center bg-gray-900 text-center px-4">
+                <p className="text-red-400">{error}</p>
+                <button onClick={refreshArticles} className="mt-4 bg-blue-600 text-white px-4 py-2 rounded-lg">
+                    Try Again
+                </button>
+            </div>
+        );
     }
     
-    // Show an error for subsequent fetches.
-    if (error) {
-        return <div className="text-center text-red-400 py-10">{error}</div>;
-    }
-
     return (
         <div className="w-full bg-gray-900 min-h-screen relative">
             <button
@@ -335,8 +364,8 @@ useEffect(() => {
             </button>
             <div
                 ref={scrollContainerRef}
-                className="pt-4 pb-4 h-screen overflow-y-auto scrollbar-hide z-10"
-                style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+                className="pt-20 pb-4 min-h-screen overflow-y-auto"
+                style={{ scrollbarWidth: 'thin' }}
             >
                 <style>
                     {`
@@ -344,6 +373,16 @@ useEffect(() => {
                             border: 2px solid #3b82f6 !important;
                             box-shadow: 0 0 15px rgba(59, 130, 246, 0.5) !important;
                             transform: scale(1.05) !important;
+                        }
+                        div[ref="scrollContainerRef"]::-webkit-scrollbar {
+                            width: 8px;
+                        }
+                        div[ref="scrollContainerRef"]::-webkit-scrollbar-thumb {
+                            background: #4b5563;
+                            border-radius: 4px;
+                        }
+                        div[ref="scrollContainerRef"]::-webkit-scrollbar-track {
+                            background: transparent;
                         }
                     `}
                 </style>
@@ -364,12 +403,12 @@ useEffect(() => {
                                 />
                                 <div className="p-4">
                                     <h3 className="text-white font-bold text-sm sm:text-base line-clamp-2">{article.heading}</h3>
+                                    <p className="text-gray-400 text-xs">Seen Count: {article.seenCount || 0}</p>
                                 </div>
                             </div>
                         ))
                     )}
-                    {/* This loading spinner is for subsequent fetches (infinite scroll). */}
-                    {loading && (
+                    {loading && page > 1 && (
                         <div className="col-span-full flex items-center justify-center py-4">
                             <span className="inline-block w-12 h-12 border-4 border-blue-400 border-t-transparent rounded-full animate-spin"></span>
                         </div>
@@ -389,7 +428,7 @@ useEffect(() => {
                         onTouchMove={handleTouchMove}
                         onTouchEnd={handleTouchEnd}
                     >
-                         <style>
+                        <style>
                             {`
                                 @media (max-width: 639px) {
                                     div[ref="modalRef"]::before {
@@ -416,27 +455,23 @@ useEffect(() => {
                         >
                             <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
                         </button>
-                        {/* --- PREVIOUS ARTICLE BUTTON --- */}
-{articleHistory.length > 1 && (
-    <button
-        onClick={handleMainPrevArticle}
-        className={`sm:flex items-center justify-center w-14 h-14 rounded-full bg-gray-600 hover:bg-gray-700 absolute left-4 top-1/2 transform -translate-y-1/2 mt-8 text-gray-300 hover:text-white z-60 hidden transition-all duration-150 ${isScrolled ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
-        title="Previous Article"
-    >
-        {/* Left-pointing arrow SVG */}
-        <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
-    </button>
-)}
-
-{/* --- NEXT ARTICLE BUTTON (Your existing button) --- */}
+                        {articleHistory.length > 1 && (
+                            <button
+                                onClick={handleMainPrevArticle}
+                                className={`sm:flex items-center justify-center w-14 h-14 rounded-full bg-gray-600 hover:bg-gray-700 absolute left-4 top-1/2 transform -translate-y-1/2 mt-8 text-gray-300 hover:text-white z-60 hidden transition-all duration-150 ${isScrolled ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+                                title="Previous Article"
+                            >
+                                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
+                            </button>
+                        )}
                         <button
-    onClick={handleMainNextArticle}
-    className={`sm:flex items-center justify-center w-14 h-14 rounded-full bg-gray-600 hover:bg-gray-700 absolute right-4 top-1/2 transform -translate-y-1/2 mt-10 text-gray-300 hover:text-white z-60 hidden transition-all duration-150 ${isScrolled ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
-    style={{ marginRight: '1rem' }}
-    title="Next Article"
->
-    <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
-</button>
+                            onClick={handleMainNextArticle}
+                            className={`sm:flex items-center justify-center w-14 h-14 rounded-full bg-gray-600 hover:bg-gray-700 absolute right-4 top-1/2 transform -translate-y-1/2 mt-10 text-gray-300 hover:text-white z-60 hidden transition-all duration-150 ${isScrolled ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}
+                            style={{ marginRight: '1rem' }}
+                            title="Next Article"
+                        >
+                            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
+                        </button>
                         <div
                             ref={modalScrollRef}
                             className="overflow-y-auto flex-1 sm:pt-8 sm:pr-20 sm:pl-20 pr-4 pl-4 pt-0 pb-12"
@@ -470,19 +505,20 @@ useEffect(() => {
                                                         <div className="p-4"><h3 className="text-white font-bold text-sm sm:text-base line-clamp-2">{article.heading}</h3></div>
                                                     </div>
                                                 ))}
-                                               <button
-    onClick={handlePrevSuggestions}
-    className="absolute -left-0.2 top-1/2 transform -translate-y-1/2 -mt-8 w-14 h-14 rounded-full bg-gray-600 hover:bg-gray-700 flex items-center justify-center text-gray-300 hover:text-white z-10 transition-all"
-    title="Previous Suggestions"
->
-    <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
-</button>                                     <button
-    onClick={handleNextSuggestions}
-    className="absolute -right-0.5 top-1/2 transform -translate-y-1/2 -mt-8 w-14 h-14 rounded-full bg-gray-600 hover:bg-gray-700 flex items-center justify-center text-gray-300 hover:text-white z-10 transition-all"
-    title="Next Suggestions"
->
-    <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
-</button>
+                                                <button
+                                                    onClick={handlePrevSuggestions}
+                                                    className="absolute -left-0.2 top-1/2 transform -translate-y-1/2 -mt-8 w-14 h-14 rounded-full bg-gray-600 hover:bg-gray-700 flex items-center justify-center text-gray-300 hover:text-white z-10 transition-all"
+                                                    title="Previous Suggestions"
+                                                >
+                                                    <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
+                                                </button>
+                                                <button
+                                                    onClick={handleNextSuggestions}
+                                                    className="absolute -right-0.5 top-1/2 transform -translate-y-1/2 -mt-8 w-14 h-14 rounded-full bg-gray-600 hover:bg-gray-700 flex items-center justify-center text-gray-300 hover:text-white z-10 transition-all"
+                                                    title="Next Suggestions"
+                                                >
+                                                    <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" /></svg>
+                                                </button>
                                             </div>
                                         </div>
                                     </div>

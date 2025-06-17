@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from
 import { GoogleOAuthProvider, GoogleLogin } from "@react-oauth/google";
 import axios from "axios";
 import UPSCPrelims from "./pages/UPSCPrelims";
-import NewsCard from "./pages/subjects/NewsCard"; // Correct component for the news page
+import NewsCard from "./pages/subjects/NewsCard";
 import Polity from "./pages/subjects/Polity";
 import CSAT from "./pages/subjects/CSAT";
 import Geography from "./pages/subjects/Geography";
@@ -11,7 +11,7 @@ import History from "./pages/subjects/History";
 import Science from "./pages/subjects/Science";
 import Environment from "./pages/subjects/Environment";
 import Economy from "./pages/subjects/Economy";
-// Note: The old 'CurrentAffairs' component is no longer used in routing, replaced by NewsCard
+import CurrentAffairs from "./pages/subjects/CurrentAffairs";
 import PreviousYearPapers from "./pages/subjects/PreviousYearPapers";
 import TamilnaduHistory from "./pages/subjects/TamilnaduHistory";
 import Spectrum from "./pages/subjects/Spectrum";
@@ -88,9 +88,8 @@ const QandaProvider = ({ children }) => {
   const [isMcqsFetching, setIsMcqsFetching] = useState(false);
   const [isQandaFetching, setIsQandaFetching] = useState(false);
   const { user } = useAuth();
-  const API_URL = "https://new-backend-tx3z.onrender.com";
+  const API_URL = process.env.REACT_APP_API_URL || "http://localhost:3001";
   const ITEMS_PER_PAGE = 10;
-  const isMcqsFetchingRef = useRef(false);
   const isQandaFetchingRef = useRef(false);
   const shouldFetchQandaRef = useRef(true);
   const refreshTimeoutRef = useRef(null);
@@ -115,7 +114,7 @@ const QandaProvider = ({ children }) => {
       }
       setQandaPairs(newPairs);
     } catch (err) {
-      console.error("QandaProvider: Error prefetching Q&A pairs:", err.message);
+      console.error("QandaProvider: Error fetching Q&A pairs:", err.message);
       setQandaPairs([]);
     } finally {
       isQandaFetchingRef.current = false;
@@ -135,20 +134,35 @@ const QandaProvider = ({ children }) => {
     }, 300);
   };
 
-  const batchFetchMCQs = async (subjects, requestedCountPerSubject, initialMCQIds, apiUrl) => {
+  const fetchNewInitialMCQs = async (userId) => {
+    if (!userId) {
+      console.error("fetchNewInitialMCQs: Missing userId");
+      return;
+    }
+    setIsMcqsFetching(true);
     try {
+      const subjects = ["Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture", "FundamentalGeography", "IndianGeography", "Science", "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers"];
+      const initialCount = 3;
+      const questionsPerSubject = Math.ceil(initialCount / subjects.length);
+      const initialMCQIds = [...mcqs.map(mcq => mcq.id?.toString()), ...cachedMcqs.map(mcq => mcq.id?.toString())];
       const books = subjects.map(subject => ({
         book: subject,
-        requestedCount: requestedCountPerSubject
+        requestedCount: questionsPerSubject
       }));
-      const response = await fetch(`${apiUrl}/user/get-multi-book-mcqs`, {
+      const response = await fetch(`${API_URL}/user/get-multi-book-mcqs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ books })
+        body: JSON.stringify({ books, userId })
       });
-      if (!response.ok) return [];
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
       const data = await response.json();
-      if (!data.mcqs || data.mcqs.length === 0) return [];
+      if (!data.mcqs || data.mcqs.length === 0) {
+        console.warn("No MCQs returned from batch endpoint", data.diagnostics || []);
+        return;
+      }
       const transformedMCQs = data.mcqs
         .filter(mcq => mcq.mcq && mcq.mcq.question && mcq.mcq.options && mcq.mcq.correctAnswer && mcq.mcq.explanation && !initialMCQIds.includes(mcq._id?.toString()))
         .map(mcq => ({
@@ -159,64 +173,15 @@ const QandaProvider = ({ children }) => {
           category: mcq.category || "",
           id: mcq._id,
         }));
-      return transformedMCQs;
-    } catch (err) {
-      console.error("Error in batchFetchMCQs:", err);
-      return [];
-    }
-  };
-
-  const fetchInitialMCQs = async () => {
-    if (isMcqsFetchingRef.current || !user) return;
-    isMcqsFetchingRef.current = true;
-    setIsMcqsFetching(true);
-    try {
-      const subjects = ["Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture", "FundamentalGeography", "IndianGeography", "Science", "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers"];
-      const initialCount = 3;
-      const cacheCount = 6;
-      const totalCount = initialCount + cacheCount;
-      const questionsPerSubject = Math.ceil(totalCount / subjects.length);
-      const initialMCQIds = [];
-      let initialMCQs = await batchFetchMCQs(subjects, questionsPerSubject, initialMCQIds, API_URL);
-      initialMCQIds.push(...initialMCQs.map(mcq => mcq.id.toString()));
-      initialMCQs = initialMCQs.slice(0, totalCount);
-      for (let i = initialMCQs.length - 1; i > 0; i--) {
+      for (let i = transformedMCQs.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
-        [initialMCQs[i], initialMCQs[j]] = [initialMCQs[j], initialMCQs[i]];
+        [transformedMCQs[i], transformedMCQs[j]] = [transformedMCQs[j], transformedMCQs[i]];
       }
-      setMcqs(initialMCQs.slice(0, initialCount));
-      setCachedMcqs(initialMCQs.slice(initialCount));
+      setCachedMcqs(prev => [...prev, ...transformedMCQs.slice(0, initialCount)]);
     } catch (err) {
-      console.error("QandaProvider: Initial MCQ fetch error:", err);
-      setMcqs([]);
+      console.error("QandaProvider: New initial MCQ fetch error:", err.message);
       setCachedMcqs([]);
     } finally {
-      isMcqsFetchingRef.current = false;
-      setIsMcqsFetching(false);
-    }
-  };
-
-  const fetchNewInitialMCQs = async () => {
-    if (isMcqsFetchingRef.current || cachedMcqs.length >= 3) return;
-    isMcqsFetchingRef.current = true;
-    setIsMcqsFetching(true);
-    try {
-      const subjects = ["Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture", "FundamentalGeography", "IndianGeography", "Science", "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers"];
-      const initialCount = 3;
-      const questionsPerSubject = Math.ceil(initialCount / subjects.length);
-      const initialMCQIds = [...mcqs.map(mcq => mcq.id.toString()), ...cachedMcqs.map(mcq => mcq.id.toString())];
-      let initialMCQs = await batchFetchMCQs(subjects, questionsPerSubject, initialMCQIds, API_URL);
-      initialMCQs = initialMCQs.slice(0, initialCount);
-      for (let i = initialMCQs.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [initialMCQs[i], initialMCQs[j]] = [initialMCQs[j], initialMCQs[i]];
-      }
-      setCachedMcqs(prev => [...prev, ...initialMCQs]);
-    } catch (err) {
-      console.error("QandaProvider: New initial MCQ fetch error:", err);
-      setCachedMcqs([]);
-    } finally {
-      isMcqsFetchingRef.current = false;
       setIsMcqsFetching(false);
     }
   };
@@ -224,7 +189,6 @@ const QandaProvider = ({ children }) => {
   useEffect(() => {
     if (user) {
       fetchQanda();
-      fetchInitialMCQs();
     } else {
       setQandaPairs([]);
       setMcqs([]);
@@ -253,59 +217,45 @@ const QandaProvider = ({ children }) => {
   );
 };
 
+// ========================================================
+// START: MODIFICATION TO `ArticleProvider`
+// Removed the prefetching logic. Now it just provides an empty
+// state and a way to refresh, but the initial fetch is handled
+// by the NewsCard component itself.
+// ========================================================
 const ArticleProvider = ({ children }) => {
   const [articles, setArticles] = useState([]);
-  const [isArticlesFetching, setIsArticlesFetching] = useState(true); // Set to true initially
+  const [isArticlesFetching, setIsArticlesFetching] = useState(false);
   const [articlesError, setArticlesError] = useState(null);
-  const API_URL = "https://new-backend-tx3z.onrender.com";
-
-  const prefetchArticles = async () => {
-    // This function will run once when the app loads
-    setIsArticlesFetching(true);
-    setArticlesError(null);
-    try {
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      const response = await axios.get(`${API_URL}/admin/get-current-affairs-articles`, {
-        params: { startDate: thirtyDaysAgo.toISOString().split('T')[0], page: 1, limit: 10 },
-      });
-      const newArticles = response.data.articles || [];
-      setArticles(newArticles);
-    } catch (err) {
-      console.error("ArticleProvider: Error prefetching articles:", err.message);
-      setArticlesError(err.message);
-      setArticles([]);
-    } finally {
-      setIsArticlesFetching(false);
-    }
+  const { user } = useAuth();
+  
+  // The refreshArticles function is now a simple state updater that NewsCard can use
+  // if you want to implement a manual refresh button later.
+  const refreshArticles = () => {
+    // This function can be built out later if a manual refresh is needed.
+    // For now, it does nothing, as NewsCard fetches on its own mount.
+    console.log("Refresh triggered, NewsCard will re-fetch on its next mount.");
   };
 
-  useEffect(() => {
-    // Prefetch articles when the provider mounts
-    prefetchArticles();
-  }, []);
-
   return (
-    <ArticleContext.Provider value={{ articles, setArticles, isArticlesFetching, articlesError }}>
+    <ArticleContext.Provider value={{ articles, setArticles, isArticlesFetching, setIsArticlesFetching, articlesError, setArticlesError, refreshArticles }}>
       {children}
     </ArticleContext.Provider>
   );
 };
+// ========================================================
+// END: MODIFICATION TO `ArticleProvider`
+// ========================================================
+
 
 const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-
-  const areUsersEqual = (prevUser, newUser) => {
-    if (prevUser === newUser) return true;
-    if (!prevUser || !newUser) return false;
-    return prevUser.email === newUser.email && prevUser.googleId === newUser.googleId && prevUser.username === newUser.username;
-  };
+  const API_URL = process.env.REACT_APP_API_URL || "http://localhost:3001";
 
   useEffect(() => {
     const savedUser = localStorage.getItem("user");
     if (savedUser) {
-      const parsedUser = JSON.parse(savedUser);
-      setUser(parsedUser);
+      setUser(JSON.parse(savedUser));
     }
   }, []);
 
@@ -317,87 +267,75 @@ const AuthProvider = ({ children }) => {
     }
   }, [user]);
 
-  const saveUserToServer = async (email, username, setError) => {
+  const loginOrSignupWithGoogle = async (token) => {
+    const jwtDecode = (t) => {
+      const base64Url = t.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      return JSON.parse(window.atob(base64));
+    };
+    const decoded = jwtDecode(token);
+    const { email, sub: googleId } = decoded;
+
     try {
-      const response = await fetch("https://trainwithme-backend.onrender.com/save-user", {
+      const response = await fetch(`${API_URL}/user/get-profile?email=${email}`);
+
+      if (response.ok) {
+        const data = await response.json();
+        const existingUser = { email, googleId, username: data.user.username, _id: data.user._id };
+        setUser(existingUser);
+        return { isNewUser: false };
+      } else if (response.status === 404) {
+        const newUser = { email, googleId, username: null };
+        setUser(newUser);
+        return { isNewUser: true };
+      } else {
+        throw new Error(`Server error: ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error("Error during login/signup process:", error);
+      return { error: error.message };
+    }
+  };
+
+  const setUsername = async (username, setError) => {
+    if (!user) return;
+    
+    const updatedUser = { ...user, username };
+    setUser(updatedUser);
+
+    try {
+      const response = await fetch(`${API_URL}/save-user`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, username }),
+        body: JSON.stringify({ email: user.email, username }),
       });
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || `${response.statusText}`);
+        throw new Error(errorData.error || 'Failed to save username');
       }
-      await response.json();
-      return true;
-    } catch (error) {
-      console.error("Error saving user to server:", error.message);
-      if (setError) setError(error.message);
-      return false;
-    }
-  };
-
-  const signupWithGoogle = (credentialResponse) => {
-    const jwtDecode = (token) => {
-      const base64Url = token.split(".")[1];
-      const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
-      return JSON.parse(window.atob(base64));
-    };
-    const decoded = jwtDecode(credentialResponse.credential);
-    const email = decoded.email;
-    const googleId = decoded.sub;
-    const userProfiles = JSON.parse(localStorage.getItem("userProfiles") || "{}");
-    const existingUsername = userProfiles[email];
-    const newUser = { email, googleId, username: existingUsername || null };
-    if (!areUsersEqual(user, newUser)) {
-      setUser(newUser);
-    }
-    return !existingUsername;
-  };
-
-  const setUsername = (username, setError) => {
-    setUser((prev) => {
-      const updatedUser = { ...prev, username };
       const userProfiles = JSON.parse(localStorage.getItem("userProfiles") || "{}");
-      userProfiles[prev.email] = username;
+      userProfiles[user.email] = username;
       localStorage.setItem("userProfiles", JSON.stringify(userProfiles));
-      saveUserToServer(prev.email, username, setError);
-      return updatedUser;
-    });
-  };
-
-  const loginWithGoogle = (credentialResponse) => {
-    const jwtDecode = (token) => {
-      const base64Url = token.split(".")[1];
-      const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
-      return JSON.parse(window.atob(base64));
-    };
-    const decoded = jwtDecode(credentialResponse.credential);
-    const email = decoded.email;
-    const googleId = decoded.sub;
-    const savedUser = JSON.parse(localStorage.getItem("user"));
-    const userProfiles = JSON.parse(localStorage.getItem("userProfiles") || "{}");
-    const existingUsername = userProfiles[email];
-    if (savedUser && savedUser.googleId === googleId) {
-      const updatedUser = { ...savedUser, username: existingUsername || savedUser.username };
-      if (!areUsersEqual(user, updatedUser)) {
-        setUser(updatedUser);
-      }
-      saveUserToServer(email, updatedUser.username);
-      return true;
-    } else {
-      signupWithGoogle(credentialResponse);
-      return false;
+    } catch (error) {
+      console.error("Error saving username:", error);
+      if (setError) setError(error.message);
+      setUser(prev => ({ ...prev, username: null }));
     }
   };
 
   const logout = () => {
+    if (window.AndroidBridge && typeof window.AndroidBridge.performGoogleSignOut === 'function') {
+      console.log("Calling native performGoogleSignOut...");
+      window.AndroidBridge.performGoogleSignOut();
+    }
     setUser(null);
     localStorage.removeItem("user");
+    localStorage.removeItem("userProfiles");
+    console.log("React state and localStorage cleared.");
   };
 
   return (
-    <AuthContext.Provider value={{ user, signupWithGoogle, setUsername, loginWithGoogle, logout }}>
+    <AuthContext.Provider value={{ user, loginOrSignupWithGoogle, setUsername, logout }}>
       {children}
     </AuthContext.Provider>
   );
@@ -413,13 +351,11 @@ function App() {
               <Routes>
                 <Route path="/" element={<Navigate to="/upsc-prelims" replace />} />
                 <Route path="/upsc-prelims" element={<UPSCPrelims />} />
-                <Route path="/current-affairs" element={<ProtectedRoute><NewsCard /></ProtectedRoute>} />
-
                 <Route path="/login" element={<LoginSignup />} />
                 <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
                 <Route path="/polity" element={<ProtectedRoute><Polity /></ProtectedRoute>} />
                 <Route path="/laxmikanth" element={<ProtectedRoute><Laxmikanth /></ProtectedRoute>} />
-                <Route path="/shankelias" element={<ProtectedRoute><ShankarIas /></ProtectedRoute>} />
+                <Route path="/shankarIas" element={<ProtectedRoute><ShankarIas /></ProtectedRoute>} />
                 <Route path="/ramesh-singh" element={<ProtectedRoute><RameshSingh /></ProtectedRoute>} />
                 <Route path="/csat" element={<ProtectedRoute><CSAT /></ProtectedRoute>} />
                 <Route path="/disha-csat" element={<ProtectedRoute><DishaCSAT /></ProtectedRoute>} />
@@ -430,17 +366,18 @@ function App() {
                 <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />
                 <Route path="/history/tamilnadu" element={<ProtectedRoute><TamilnaduHistory /></ProtectedRoute>} />
                 <Route path="/history/spectrum" element={<ProtectedRoute><Spectrum /></ProtectedRoute>} />
-                <Route path="/history/artifacts" element={<ProtectedRoute><ArtAndCulture /></ProtectedRoute>} />
+                <Route path="/history/artandculture" element={<ProtectedRoute><ArtAndCulture /></ProtectedRoute>} />
                 <Route path="/science" element={<ProtectedRoute><Science /></ProtectedRoute>} />
                 <Route path="/disha-ias-science" element={<ProtectedRoute><DishaIasScience /></ProtectedRoute>} />
                 <Route path="/environment" element={<ProtectedRoute><Environment /></ProtectedRoute>} />
                 <Route path="/economy" element={<ProtectedRoute><Economy /></ProtectedRoute>} />
+                <Route path="/current-affairs" element={<ProtectedRoute><CurrentAffairs /></ProtectedRoute>} />
                 <Route path="/vision-ias-dec-2024" element={<ProtectedRoute><VisionIasDec2024 /></ProtectedRoute>} />
                 <Route path="/previous-year-papers" element={<ProtectedRoute><PreviousYearPapers /></ProtectedRoute>} />
                 <Route path="/disha-ias-previous-year-paper" element={<ProtectedRoute><DishaIasPreviousYearPaper /></ProtectedRoute>} />
                 <Route path="/oneliners" element={<ProtectedRoute><OneLiner /></ProtectedRoute>} />
+                <Route path="/newscard" element={<ProtectedRoute><NewsCard /></ProtectedRoute>} />
                 <Route path="/battleground" element={<ProtectedRoute><Battleground /></ProtectedRoute>} />
-                
                 <Route path="*" element={<Navigate to="/upsc-prelims" replace />} />
               </Routes>
             </BrowserRouter>
@@ -452,30 +389,81 @@ function App() {
 }
 
 const LoginSignup = () => {
-  const { user, signupWithGoogle, loginWithGoogle, setUsername } = useAuth();
+  const { user, loginOrSignupWithGoogle, setUsername } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [username, setUsernameInput] = useState("");
+  const [usernameInput, setUsernameInputState] = useState("");
   const [error, setError] = useState("");
 
   const from = location.state?.from || "/upsc-prelims";
 
-  const handleGoogleSuccess = (credentialResponse) => {
-    const isNewUser = signupWithGoogle(credentialResponse);
-    if (!isNewUser) {
+  const handleTokenReceived = async (token) => {
+    if (!token) {
+      setError("Received an empty token. Please try again.");
+      return;
+    }
+    setError("");
+    const result = await loginOrSignupWithGoogle(token);
+
+    if (result.error) {
+      setError(result.error);
+    } else if (!result.isNewUser) {
       navigate(from, { replace: true });
     }
   };
 
-  const handleGoogleFailure = () => {
-    setError("Google authentication failed");
+  const handleWebGoogleSuccess = (credentialResponse) => {
+    handleTokenReceived(credentialResponse.credential);
   };
+  
+  const handleGoogleFailure = () => {
+    setError("Google authentication failed. Please try again.");
+  };
+
+  useEffect(() => {
+    const handleNativeTokenEvent = (event) => {
+      const { token } = event.detail;
+      if (token) {
+        console.log("Received token from native app.");
+        handleTokenReceived(token);
+      }
+    };
+    window.addEventListener('google-sign-in-success', handleNativeTokenEvent);
+    
+    return () => {
+      window.removeEventListener('google-sign-in-success', handleNativeTokenEvent);
+    };
+  }, []);
 
   const handleUsernameSubmit = async (e) => {
     e.preventDefault();
-    setUsername(username, setError);
+    await setUsername(usernameInput, setError);
     navigate(from, { replace: true });
   };
+
+  const NativeGoogleButton = () => (
+    <button
+      onClick={() => {
+        if (window.AndroidBridge && typeof window.AndroidBridge.performGoogleSignIn === 'function') {
+          console.log("Calling native performGoogleSignIn...");
+          window.AndroidBridge.performGoogleSignIn();
+        } else {
+          setError("This app is not running in the correct mobile environment.");
+          console.error("window.AndroidBridge.performGoogleSignIn not found!");
+        }
+      }}
+      className="w-full bg-blue-600 p-3 rounded-lg hover:bg-blue-700 transition-colors duration-300 text-white font-semibold"
+    >
+      Continue with Google
+    </button>
+  );
+
+  const WebGoogleButton = () => (
+    <GoogleLogin
+      onSuccess={handleWebGoogleSuccess}
+      onError={handleGoogleFailure}
+    />
+  );
 
   if (user && !user.username) {
     return (
@@ -485,8 +473,8 @@ const LoginSignup = () => {
           {error && <p className="text-red-400 mb-4">{error}</p>}
           <input
             type="text"
-            value={username}
-            onChange={(e) => setUsernameInput(e.target.value)}
+            value={usernameInput}
+            onChange={(e) => setUsernameInputState(e.target.value)}
             placeholder="Enter unique username"
             className="w-full p-2 mb-4 bg-gray-700 rounded text-white"
             required
@@ -501,15 +489,11 @@ const LoginSignup = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">
-      <div className="bg-gray-800 p-6 rounded-lg">
+      <div className="bg-gray-800 p-6 rounded-lg text-center">
         <h2 className="text-2xl mb-4">Login or Sign Up</h2>
         {error && <p className="text-red-400 mb-4">{error}</p>}
-        <GoogleLogin
-          onSuccess={handleGoogleSuccess}
-          onError={handleGoogleFailure}
-          buttonText="Continue with Google"
-          className="w-full bg-white text-black p-2 rounded hover:bg-gray-200"
-        />
+        
+        {window.AndroidBridge ? <NativeGoogleButton /> : <WebGoogleButton />}
       </div>
     </div>
   );

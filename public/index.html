@@ -16,6 +16,7 @@
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root"></div>
+
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function() {
@@ -27,6 +28,15 @@
             console.log('ServiceWorker registration failed: ', err);
           });
         });
+      }
+    </script>
+    
+    <script>
+      function handleGoogleSignInSuccess(token) {
+        // This function creates a custom event that our React app can listen for.
+        // It passes the token from the native app into the React app.
+        const event = new CustomEvent('google-sign-in-success', { detail: { token } });
+        window.dispatchEvent(event);
       }
     </script>
     </body>

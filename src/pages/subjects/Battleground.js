@@ -26,6 +26,17 @@ const Battleground = () => {
   const [timeLeft, setTimeLeft] = useState(6 * 60); // 6 minutes for 10 questions
   const [timerActive, setTimerActive] = useState(false);
   const [totalQuestions, setTotalQuestions] = useState(10);
+  const [showPopup, setShowPopup] = useState(false);
+  const [showTestPopup, setShowTestPopup] = useState(false);
+  const [selectedQuestionCount, setSelectedQuestionCount] = useState(null);
+  const [isFirstReturnAfterSubmit, setIsFirstReturnAfterSubmit] = useState(false);
+
+  const testLabels = {
+    10: "Quick Test",
+    25: "Rapid Test",
+    50: "Half Length",
+    100: "Full Length Test",
+  };
 
   const [scoreDetails, setScoreDetails] = useState({
     totalQuestions: 0,
@@ -37,14 +48,299 @@ const Battleground = () => {
     percentage: 0,
   });
 
-  const API_URL = process.env.REACT_APP_API_URL || "https://new-backend-tx3z.onrender.com";
+  const API_URL = process.env.REACT_APP_API_URL || "http://localhost:3001";
   const PRELIMS_CUTOFF = 50;
   const isFetchingRef = useRef(false);
-  const hasInitialized = useRef(false);
+  const markedMcqIdsRef = useRef(new Set());
+  const markMcqTimeoutRef = useRef(null);
+
+  const categoryToBookMap = {
+    TamilnaduHistory: { bookName: "Tamilnadu History Book", category: "History" },
+    Spectrum: { bookName: "Spectrum Book", category: "History" },
+    ArtAndCulture: { bookName: "Nitin Singhania Art and Culture Book", category: "History" },
+    FundamentalGeography: { bookName: "NCERT Class 11th Fundamentals of Physical Geography", category: "Geography" },
+    IndianGeography: { bookName: "NCERT Class 11th Indian Geography", category: "Geography" },
+    Science: { bookName: "Disha IAS Previous Year Papers (Science Section)", category: "Science" },
+    Environment: { bookName: "Shankar IAS Environment Book", category: "Environment" },
+    Economy: { bookName: "Ramesh Singh Indian Economy Book", category: "Economy" },
+    CSAT: { bookName: "Disha IAS Previous Year Papers (CSAT Section)", category: "CSAT" },
+    CurrentAffairs: { bookName: "Vision IAS Current Affairs Magazine", category: "Current Affairs" },
+    PreviousYearPapers: { bookName: "Disha Publication’s UPSC Prelims Previousissued Papers", category: "PreviousYearPapers" },
+    Polity: { bookName: "Laxmikanth Indian Polity", category: "Politics" },
+  };
+
+  const resultsRef = useRef(null);
+  const touchStartY = useRef(0);
+  const touchCurrentY = useRef(0);
+
+  const handleTouchStart = (e) => {
+    touchStartY.current = e.touches[0].clientY;
+    touchCurrentY.current = touchStartY.current;
+  };
+
+  const handleTouchMove = (e) => {
+    if (!resultsRef.current) return;
+    touchCurrentY.current = e.touches[0].clientY;
+    const deltaY = touchCurrentY.current - touchStartY.current;
+    if (deltaY > 0 && resultsRef.current) {
+      resultsRef.current.style.transform = `translateY(${deltaY}px)`;
+    }
+  };
+
+  const handleReturnToSolutions = () => {
+    if (isFirstReturnAfterSubmit) {
+      setCurrentQuestionIndex(0);
+      setSelectedOption(userAnswers[0] || "");
+      setShowExplanation(false);
+      setIsFirstReturnAfterSubmit(false);
+    }
+    setShowResultsPage(false);
+  };
+
+  const handleTouchEnd = () => {
+    if (!resultsRef.current) return;
+    const deltaY = touchCurrentY.current - touchStartY.current;
+    if (deltaY > 50 && resultsRef.current) {
+      resultsRef.current.style.transition = 'transform 0.3s ease-out';
+      resultsRef.current.style.transform = `translateY(100vh)`;
+      setTimeout(() => {
+        handleReturnToSolutions();
+        if (resultsRef.current) {
+          resultsRef.current.style.transition = '';
+          resultsRef.current.style.transform = '';
+        }
+      }, 300);
+    } else if (resultsRef.current) {
+      resultsRef.current.style.transition = 'transform 0.3s ease-out';
+      resultsRef.current.style.transform = '';
+      setTimeout(() => {
+        if (resultsRef.current) {
+          resultsRef.current.style.transition = '';
+        }
+      }, 300);
+    }
+  };
+
+  const fetchInitialMCQ = async () => {
+    if (isMcqsFetching || !user || !user.email) {
+      console.log("fetchInitialMCQ: Blocked", { isMcqsFetching, user: !!user, email: user?.email });
+      return;
+    }
+    setLoading(true);
+    setLoadingMessage("Loading first question...");
+    try {
+      console.log("fetchInitialMCQ: Fetching initial MCQ for user", user.email);
+      const subjects = [
+        "Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture",
+        "FundamentalGeography", "IndianGeography", "Science",
+        "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers"
+      ];
+      const response = await fetch(`${API_URL}/user/get-multi-book-mcqs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          books: subjects.map(subject => ({ book: subject, requestedCount: 1 })),
+          userId: user.email
+        })
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      if (!data.mcqs || data.mcqs.length === 0) {
+        throw new Error("No MCQs available");
+      }
+      const transformedMCQ = data.mcqs
+        .filter(mcq => mcq.mcq && mcq.mcq.question && mcq.mcq.options && mcq.mcq.correctAnswer && mcq.mcq.explanation)
+        .map(mcq => ({
+          question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
+          options: mcq.mcq.options,
+          correctAnswer: mcq.mcq.correctAnswer,
+          explanation: mcq.mcq.explanation,
+          category: mcq.category || "",
+          id: mcq._id,
+        }))[0];
+      if (!transformedMCQ) {
+        throw new Error("No valid MCQ found");
+      }
+      setMcqs([transformedMCQ]);
+      setQuestions([transformedMCQ]);
+      setUserAnswers([null]);
+      setQuestionStatuses(["unattempted"]);
+      setTestStarted(true);
+      setTimerActive(true);
+      console.log("fetchInitialMCQ: Successfully loaded initial MCQ", transformedMCQ.id);
+    } catch (err) {
+      console.error("fetchInitialMCQ: Error:", err.message);
+      setError("Failed to load the first question. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchRemainingMCQs = async (desiredCount, initialMCQIds) => {
+    if (isFetchingRef.current || !user || !user.email) {
+      console.log("fetchRemainingMCQs: Blocked", { isFetching: isFetchingRef.current, user: !!user, email: user?.email });
+      return;
+    }
+    isFetchingRef.current = true;
+
+    console.log("fetchRemainingMCQs: Called with desiredCount", desiredCount);
+
+    try {
+      let allSubjects = [
+        "Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture",
+        "FundamentalGeography", "IndianGeography", "Science",
+        "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers"
+      ];
+      let remainingCount = Math.max(desiredCount - questions.length, 0);
+      let allMCQs = [];
+      let fetchedMCQIds = new Set([...initialMCQIds]);
+      let maxRetries = 5;
+
+      while (remainingCount > 0 && allSubjects.length > 0 && maxRetries > 0) {
+        const questionsPerSubject = Math.ceil(remainingCount / allSubjects.length);
+        console.log(
+          `Attempting to fetch ${remainingCount} MCQs, ${questionsPerSubject} per subject, subjects: ${allSubjects.join(", ")}`
+        );
+
+        const books = allSubjects.map(subject => ({
+          book: subject,
+          requestedCount: questionsPerSubject
+        }));
+
+        const response = await fetch(`${API_URL}/user/get-multi-book-mcqs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ books, userId: user.email })
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          console.warn(`Failed to fetch MCQs: HTTP ${response.status}`, errorData);
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        if (!data.mcqs || data.mcqs.length === 0) {
+          console.warn("No MCQs returned", data.diagnostics || []);
+          break;
+        }
+
+        console.log("MCQ fetch diagnostics:", data.diagnostics);
+        console.log("Raw MCQ IDs fetched:", data.mcqs.map(mcq => mcq._id?.toString()));
+
+        const transformedMCQs = [];
+        for (const mcq of data.mcqs) {
+          if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
+            console.warn("Invalid MCQ skipped:", mcq._id?.toString());
+            continue;
+          }
+          const mcqIdStr = mcq._id?.toString();
+          if (fetchedMCQIds.has(mcqIdStr)) {
+            console.warn(`Duplicate MCQ ID filtered out: ${mcqIdStr}`);
+            continue;
+          }
+          fetchedMCQIds.add(mcqIdStr);
+          transformedMCQs.push({
+            question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
+            options: mcq.mcq.options,
+            correctAnswer: mcq.mcq.correctAnswer,
+            explanation: mcq.mcq.explanation,
+            category: mcq.category || null,
+            id: mcq._id,
+          });
+        }
+
+        if (transformedMCQs.length > 0) {
+          allMCQs = [...allMCQs, ...transformedMCQs];
+          remainingCount = Math.max(desiredCount - (questions.length + allMCQs.length), 0);
+        }
+
+        const availableSubjects = data.diagnostics
+          .filter(d => d.available > d.requested && d.available > 0 && !d.error)
+          .map(d => Object.keys(categoryToBookMap).find(key => categoryToBookMap[key].category === d.category))
+          .filter(Boolean);
+
+        if (availableSubjects.length === 0 && remainingCount > 0) {
+          console.warn("No subjects with additional MCQs available");
+          break;
+        }
+
+        allSubjects = availableSubjects;
+        maxRetries--;
+
+        console.log(
+          `Fetched ${transformedMCQs.length} unique MCQs, remaining: ${remainingCount}, retries left: ${maxRetries}, available subjects: ${allSubjects.join(", ")}`
+        );
+
+        if (questions.length + allMCQs.length >= desiredCount) {
+          console.log("Sufficient unique MCQs fetched, stopping further requests");
+          break;
+        }
+      }
+
+      const uniqueMCQs = [];
+      const seenIds = new Set();
+      for (const mcq of allMCQs) {
+        if (!seenIds.has(mcq.id.toString())) {
+          seenIds.add(mcq.id.toString());
+          uniqueMCQs.push(mcq);
+        } else {
+          console.warn(`Duplicate MCQ ID detected in final list: ${mcq.id.toString()}`);
+        }
+      }
+
+      if (uniqueMCQs.length > 0) {
+        setQuestions(prevQuestions => {
+          const updatedMCQs = [...prevQuestions, ...uniqueMCQs].slice(0, desiredCount);
+          console.log("Setting questions state with unique MCQs:", updatedMCQs.map(m => m.id.toString()));
+          return updatedMCQs;
+        });
+        setMcqs(prevMcqs => {
+          const updatedMCQs = [...prevMcqs, ...uniqueMCQs].slice(0, desiredCount);
+          return updatedMCQs;
+        });
+        setUserAnswers(prevAnswers => [...prevAnswers, ...new Array(uniqueMCQs.length).fill(null)]);
+        setQuestionStatuses(prevStatuses => [...prevStatuses, ...new Array(uniqueMCQs.length).fill("unattempted")]);
+        setTotalQuestions(Math.min(desiredCount, questions.length + uniqueMCQs.length));
+      }
+
+      console.log("fetchRemainingMCQs: Fetched total unique MCQs", uniqueMCQs.length);
+
+      if (questions.length + uniqueMCQs.length < desiredCount) {
+        const unavailableSubjects = Object.keys(categoryToBookMap).filter(
+          s => !uniqueMCQs.some(mcq => mcq.category === categoryToBookMap[s]?.category)
+        );
+        setError(
+          `Unable to load all ${desiredCount} questions (loaded ${questions.length + uniqueMCQs.length}). Subjects with insufficient questions: ${unavailableSubjects.join(", ") || "unknown"}. Try a lower question count.`
+        );
+      }
+    } catch (err) {
+      console.error("Error in fetchRemainingMCQs:", err.message);
+      setError("Failed to load additional questions. Please try again.");
+    } finally {
+      isFetchingRef.current = false;
+    }
+  };
 
   useEffect(() => {
     console.log("Battleground: Initial state", { user, testStarted, loading, error });
+    console.log("User object:", user);
+    if (user && user.email) {
+      fetchInitialMCQ();
+    } else {
+      setError("Please log in to access Battleground.");
+    }
   }, [user]);
+
+  useEffect(() => {
+    if (testStarted && questions.length === 1 && !isFetchingRef.current && user && user.email) {
+      console.log("Triggering background fetch for remaining MCQs", { desired: totalQuestions - 1 });
+      fetchRemainingMCQs(totalQuestions, questions.map(q => q.id.toString()));
+    }
+  }, [testStarted, questions.length, totalQuestions, user]);
 
   useEffect(() => {
     let timer;
@@ -64,6 +360,64 @@ const Battleground = () => {
     return () => clearInterval(timer);
   }, [timerActive, timeLeft]);
 
+  const markMcqAsSeen = async (mcqId, retries = 3) => {
+    if (!user || !user.email || !mcqId) {
+      console.error("markMcqAsSeen: Invalid parameters", { user: !!user, email: user?.email, mcqId });
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/user/mark-mcq-seen`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: user.email,
+          mcqId,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.success) {
+        console.log(`MCQ ${mcqId} marked as seen for user ${user.email}`);
+      }
+    } catch (error) {
+      console.error(`Error marking MCQ ${mcqId} as seen (attempt ${4 - retries}/3):`, error.message);
+      if (retries > 0) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        return markMcqAsSeen(mcqId, retries - 1);
+      } else {
+        console.error(`Failed to mark MCQ ${mcqId} as seen after 3 attempts`);
+        markedMcqIdsRef.current.delete(mcqId);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (testStarted && questions.length > 0 && currentQuestionIndex < questions.length && user && user.email) {
+      const currentMcqId = questions[currentQuestionIndex]?.id?.toString();
+      if (currentMcqId && !markedMcqIdsRef.current.has(currentMcqId)) {
+        if (markMcqTimeoutRef.current) {
+          clearTimeout(markMcqTimeoutRef.current);
+        }
+        markMcqTimeoutRef.current = setTimeout(() => {
+          markedMcqIdsRef.current.add(currentMcqId);
+          console.log(`Marking MCQ ${currentMcqId} as seen for user ${user.email}`);
+          markMcqAsSeen(currentMcqId);
+        }, 100);
+      }
+    }
+    return () => {
+      if (markMcqTimeoutRef.current) {
+        clearTimeout(markMcqTimeoutRef.current);
+      }
+    };
+  }, [currentQuestionIndex, testStarted, user]);
+
   const formatTime = (seconds) => {
     const minutes = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -72,174 +426,49 @@ const Battleground = () => {
 
   const handleGoBack = () => {
     fetchNewInitialMCQs();
-    navigate("/upsc-prelims");
+    window.location.href = "/upsc-prelims";
   };
-
-  const batchFetchMCQs = async (subjects, requestedCountPerSubject, initialMCQIds, apiUrl) => {
-    try {
-      const books = subjects.map(subject => ({
-        book: subject,
-        requestedCount: requestedCountPerSubject
-      }));
-
-      const response = await fetch(`${apiUrl}/user/get-multi-book-mcqs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ books })
-      });
-
-      if (!response.ok) {
-        console.warn(`Failed to fetch MCQs: HTTP ${response.status}`);
-        return [];
-      }
-
-      const data = await response.json();
-      if (!data.mcqs || data.mcqs.length === 0) {
-        console.warn("No MCQs returned from batch endpoint");
-        return [];
-      }
-
-      const transformedMCQs = data.mcqs
-        .filter(mcq => {
-          if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
-            return false;
-          }
-          if (initialMCQIds.includes(mcq._id?.toString())) {
-            return false;
-          }
-          return true;
-        })
-        .map(mcq => ({
-          question: Array.isArray(mcq.mcq.question) ? mcq.mcq.question : mcq.mcq.question.split("\n").filter(line => line.trim()),
-          options: mcq.mcq.options,
-          correctAnswer: mcq.mcq.correctAnswer,
-          explanation: mcq.mcq.explanation,
-          category: mcq.category || null,
-          id: mcq._id,
-        }));
-
-      return transformedMCQs;
-    } catch (err) {
-      console.error("Error in batchFetchMCQs:", err);
-      return [];
-    }
-  };
-
-  const fetchRemainingMCQs = async (desiredCount, initialMCQIds) => {
-    if (isFetchingRef.current) return;
-    isFetchingRef.current = true;
-
-    console.log("Battleground: fetchRemainingMCQs called with desiredCount", desiredCount);
-
-    try {
-      const subjects = [
-        "Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture",
-        "FundamentalGeography", "IndianGeography", "Science",
-        "Environment", "Economy", "CurrentAffairs", "PreviousYearPapers",
-      ];
-      const remainingCount = Math.max(desiredCount - questions.length, 0);
-      const questionsPerSubject = Math.ceil(remainingCount / subjects.length);
-      let remainingMCQs = [];
-
-      console.log(`Battleground: Attempting to fetch ${remainingCount} remaining MCQs`);
-
-      remainingMCQs = await batchFetchMCQs(subjects, questionsPerSubject, initialMCQIds, API_URL);
-
-      if (remainingMCQs.length > 0) {
-        setQuestions(prevQuestions => {
-          const allMCQs = [...prevQuestions, ...remainingMCQs];
-          return allMCQs.slice(0, desiredCount);
-        });
-        setMcqs(prevMcqs => {
-          const allMCQs = [...prevMcqs, ...remainingMCQs];
-          return allMCQs.slice(0, desiredCount);
-        });
-        setUserAnswers(prevAnswers => [...prevAnswers, ...new Array(remainingMCQs.length).fill(null)]);
-        setQuestionStatuses(prevStatuses => [...prevStatuses, ...new Array(remainingMCQs.length).fill("unattempted")]);
-        setTotalQuestions(desiredCount);
-      }
-
-      console.log("Battleground: Fetched remaining MCQs", remainingMCQs.length);
-
-      if (questions.length + remainingMCQs.length < desiredCount) {
-        setError(`Warning: Loaded ${questions.length + remainingMCQs.length} out of ${desiredCount} requested MCQs. Some subjects may have no available questions.`);
-      }
-    } catch (err) {
-      console.error("Error in fetchRemainingMCQs:", err);
-      setError("Failed to load additional MCQs. Please try again.");
-    } finally {
-      isFetchingRef.current = false;
-    }
-  };
-
-  useEffect(() => {
-    if (!user) {
-      console.log("Battleground: No user, redirecting to login");
-      navigate("/login", { state: { from: "/battleground" } });
-      return;
-    }
-
-    if (!hasInitialized.current) {
-      if (mcqs.length > 0) {
-        console.log("Battleground: Initializing 10-question test with preloaded MCQs", mcqs.length);
-        hasInitialized.current = true;
-        setQuestions([...mcqs]);
-        setUserAnswers(new Array(mcqs.length).fill(null));
-        setQuestionStatuses(new Array(mcqs.length).fill("unattempted"));
-        setCurrentQuestionIndex(0);
-        setScore(null);
-        setSelectedOption("");
-        setShowExplanation(false);
-        setShowResultsPage(false);
-        setTestStarted(true);
-        setTimerActive(true);
-        setTotalQuestions(10);
-        setLoading(false);
-      } else if (isMcqsFetching) {
-        console.log("Battleground: Waiting for initial MCQs to load");
-        setLoading(true);
-        setLoadingMessage("Loading MCQs...");
-      } else {
-        console.log("Battleground: No preloaded MCQs and not fetching, setting error");
-        setError("Failed to load initial MCQs. Please try again.");
-        setLoading(false);
-        setTestStarted(false);
-      }
-    }
-  }, [user, navigate, mcqs, isMcqsFetching]);
-
-  useEffect(() => {
-    if (testStarted && questions.length > 0 && questions.length < totalQuestions && !isFetchingRef.current) {
-      console.log("Battleground: Triggering fetchRemainingMCQs", { desired: totalQuestions, current: questions.length });
-      fetchRemainingMCQs(totalQuestions, questions.map(q => q.id.toString()));
-    }
-  }, [testStarted, questions.length, totalQuestions]);
 
   const toggleSidebar = () => {
-    if (!showSidebar && cachedMcqs.length < 3) {
+    if (!showSidebar && cachedMcqs.length < 3 && user && user.email) {
       fetchNewInitialMCQs();
     }
     setShowSidebar(prev => !prev);
   };
 
-  const fetchLeaderboard = async () => {
+  const fetchLeaderboard = async (retries = 3) => {
+    const validQuestionCounts = [10, 25, 50, 100];
+    if (!validQuestionCounts.includes(totalQuestions)) {
+      console.warn(`Skipping leaderboard fetch for invalid questionCount: ${totalQuestions}`);
+      setLeaderboard([]);
+      return;
+    }
+
     try {
-      const res = await fetch(`${API_URL}/battleground/leaderboard`, {
+      const res = await fetch(`${API_URL}/battleground/leaderboard?questionCount=${totalQuestions}`, {
         headers: { "Content-Type": "application/json" },
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setLeaderboard(data.rankings || []);
-      console.log("Battleground: Fetched leaderboard", data.rankings?.length || 0);
+      console.log(`Battleground: Fetched leaderboard for ${totalQuestions} questions`, data.rankings?.length || 0);
     } catch (error) {
-      console.error("Error fetching leaderboard:", error.message);
-      setLeaderboard([]);
+      console.error(`Error fetching leaderboard for ${totalQuestions} questions:`, error.message);
+      if (retries > 0) {
+        console.log(`Retrying leaderboard fetch, ${retries} attempts left`);
+        setTimeout(() => fetchLeaderboard(retries - 1), 2000);
+      } else {
+        console.error(`Failed to load leaderboard for ${totalQuestions}-question test after 3 attempts`);
+        setLeaderboard([]);
+      }
     }
   };
 
   useEffect(() => {
-    fetchLeaderboard();
-  }, []);
+    if (user && user.email) {
+      fetchLeaderboard();
+    }
+  }, [totalQuestions, user]);
 
   useEffect(() => {
     const questionBox = document.querySelector('.question-box');
@@ -265,25 +494,36 @@ const Battleground = () => {
     }
   }, [questions, currentQuestionIndex]);
 
-  const handleOptionSelect = (option) => {
-    const newAnswers = [...userAnswers];
-    const newStatuses = [...questionStatuses];
-    newAnswers[currentQuestionIndex] = option;
-    newStatuses[currentQuestionIndex] = option === questions[currentQuestionIndex].correctAnswer ? "correct" : "wrong";
-    setUserAnswers(newAnswers);
-    setQuestionStatuses(newStatuses);
-    setSelectedOption(option);
-    setShowExplanation(false);
+  const handleOptionSelect = (option, event) => {
+    if (selectedOption === option) {
+      const newAnswers = [...userAnswers];
+      const newStatuses = [...questionStatuses];
+      newAnswers[currentQuestionIndex] = null;
+      newStatuses[currentQuestionIndex] = "unattempted";
+      setUserAnswers(newAnswers);
+      setQuestionStatuses(newStatuses);
+      setSelectedOption("");
+      if (event.currentTarget) {
+        event.currentTarget.blur();
+      }
+    } else {
+      const newAnswers = [...userAnswers];
+      const newStatuses = [...questionStatuses];
+      newAnswers[currentQuestionIndex] = option;
+      newStatuses[currentQuestionIndex] = "attempted";
+      setUserAnswers(newAnswers);
+      setQuestionStatuses(newStatuses);
+      setSelectedOption(option);
+      setShowExplanation(false);
+    }
   };
 
   const handleNextQuestion = () => {
-    if (currentQuestionIndex >= totalQuestions - 1 || currentQuestionIndex >= questions.length - 1) return;
-
-    if (selectedOption === "") {
-      const newStatuses = [...questionStatuses];
-      newStatuses[currentQuestionIndex] = "unattempted";
-      setQuestionStatuses(newStatuses);
-    }
+    if (
+      currentQuestionIndex >= totalQuestions - 1 ||
+      currentQuestionIndex >= questions.length - 1
+    )
+      return;
 
     const nextIndex = currentQuestionIndex + 1;
     setCurrentQuestionIndex(nextIndex);
@@ -294,14 +534,21 @@ const Battleground = () => {
     }
   };
 
+  const handleFilteredNextQuestion = () => {
+    const filteredIndices = Array.from({ length: totalQuestions })
+      .map((_, i) => i)
+      .filter(i => filter === "all" || questionStatuses[i] === filter);
+    const currentFilteredIndex = filteredIndices.indexOf(currentQuestionIndex);
+    const nextFilteredIndex = currentFilteredIndex < filteredIndices.length - 1
+      ? filteredIndices[currentFilteredIndex + 1]
+      : filteredIndices[0];
+    setCurrentQuestionIndex(nextFilteredIndex);
+    setSelectedOption(userAnswers[nextFilteredIndex] || "");
+    setShowExplanation(false);
+  };
+
   const handlePreviousQuestion = () => {
     if (currentQuestionIndex > 0) {
-      if (selectedOption === "") {
-        const newStatuses = [...questionStatuses];
-        newStatuses[currentQuestionIndex] = "unattempted";
-        setQuestionStatuses(newStatuses);
-      }
-
       const prevIndex = currentQuestionIndex - 1;
       setCurrentQuestionIndex(prevIndex);
       setSelectedOption(userAnswers[prevIndex] || "");
@@ -311,11 +558,6 @@ const Battleground = () => {
 
   const submitTest = () => {
     let newAnswers = [...userAnswers];
-    if (selectedOption !== "") {
-      newAnswers[currentQuestionIndex] = selectedOption;
-      setUserAnswers(newAnswers);
-    }
-
     let correctCount = 0;
     let wrongCount = 0;
     let attempted = 0;
@@ -356,6 +598,8 @@ const Battleground = () => {
     });
 
     setShowResultsPage(true);
+    setShowPopup(false);
+    setIsFirstReturnAfterSubmit(true);
 
     fetch(`${API_URL}/battleground/submit`, {
       method: "POST",
@@ -363,6 +607,7 @@ const Battleground = () => {
       body: JSON.stringify({
         username: user.username,
         score: totalScore,
+        questionCount: totalQuestions
       }),
     })
       .then(res => {
@@ -371,19 +616,26 @@ const Battleground = () => {
       })
       .then(data => {
         setLeaderboard(data.rankings || []);
-        console.log("Battleground: Test submitted, leaderboard updated", data.rankings?.length || 0);
+        console.log(`Battleground: Test submitted for ${totalQuestions} questions, leaderboard updated`, data.rankings?.length || 0);
       })
       .catch(error => {
         console.error("Error submitting test:", error);
+        setError(`Failed to submit score for ${totalQuestions}-question test. Please try again.`);
       });
   };
 
   const resetTest = (questionCount) => {
     console.log("Battleground: Resetting test with", questionCount, "questions");
+    markedMcqIdsRef.current.clear();
+    if (markMcqTimeoutRef.current) {
+      clearTimeout(markMcqTimeoutRef.current);
+    }
     setTestStarted(false);
-    setQuestions([...mcqs]);
-    setUserAnswers(new Array(mcqs.length).fill(null));
-    setQuestionStatuses(new Array(mcqs.length).fill("unattempted"));
+    setQuestions([]);
+    setMcqs([]);
+    setCachedMcqs([]);
+    setUserAnswers([]);
+    setQuestionStatuses([]);
     setCurrentQuestionIndex(0);
     setScore(null);
     setSelectedOption("");
@@ -392,6 +644,7 @@ const Battleground = () => {
     setFilter("all");
     setShowSidebar(false);
     setMaxQuestionReached(0);
+    setIsFirstReturnAfterSubmit(false);
     setScoreDetails({
       totalQuestions: 0,
       attempted: 0,
@@ -401,11 +654,16 @@ const Battleground = () => {
       totalScore: 0,
       percentage: 0,
     });
+    setError(null);
     setLoading(false);
-    setTimeLeft(questionCount === 25 ? 12 * 60 : questionCount === 50 ? 30 * 60 : questionCount === 100 ? 60 * 60 : 6 * 60);
-    setTimerActive(true);
+    setTimeLeft(
+      questionCount === 25 ? 12 * 60 :
+        questionCount === 50 ? 30 * 60 :
+          questionCount === 100 ? 60 * 60 : 6 * 60
+    );
+    setTimerActive(false);
     setTotalQuestions(questionCount);
-    setTestStarted(true);
+    setTimeout(() => fetchInitialMCQ(), 0);
   };
 
   const handleFilterChange = (newFilter) => {
@@ -422,24 +680,25 @@ const Battleground = () => {
 
   const handleQuestionCountSelect = (count) => {
     const parsedCount = parseInt(count, 10);
-    if (parsedCount && [25, 50, 100].includes(parsedCount)) {
-      console.log("Battleground: Selected question count", parsedCount);
-      if (cachedMcqs.length >= 3) {
-        setMcqs(cachedMcqs.slice(0, 3));
-        setCachedMcqs(cachedMcqs.slice(3));
-        resetTest(parsedCount);
-        fetchNewInitialMCQs();
-      } else if (isMcqsFetching) {
-        console.log("Battleground: Waiting for MCQs to load for question count", parsedCount);
-        setLoading(true);
-        setLoadingMessage("Loading MCQs...");
-      } else {
-        setError("Failed to load MCQs. Please try again.");
-      }
+    if (parsedCount && [10, 25, 50, 100].includes(parsedCount)) {
+      console.log("Battleground: Staging question count", parsedCount);
+      setSelectedQuestionCount(parsedCount);
     }
   };
 
-  // ---- Question Type Detection Functions ----
+  const startNewTest = () => {
+    if (!selectedQuestionCount || !user || !user.email) {
+      console.log("startNewTest: Blocked", { selectedQuestionCount, user: !!user, email: user?.email });
+      setError("Please select a question count and ensure you are logged in.");
+      return;
+    }
+    console.log("startNewTest: Starting test with", selectedQuestionCount, "questions");
+    setError(null);
+    resetTest(selectedQuestionCount);
+    setShowPopup(false);
+    setShowTestPopup(false);
+  };
+
   const isTableBasedQuestion = (questionLines) => (
     questionLines &&
     questionLines.some((line) => line.includes("      ")) &&
@@ -456,7 +715,7 @@ const Battleground = () => {
     questionLines &&
     questionLines.some((line) => /^\d+\./.test(line)) &&
     (questionLines.some((line) => line.includes("Which of the statements given above is/are correct?")) ||
-     questionLines.some((line) => line.includes("How many of the above statements are correct?")))
+      questionLines.some((line) => line.includes("How many of the above statements are correct?")))
   );
 
   const isChronologicalOrderQuestion = (questionLines) => (
@@ -480,7 +739,6 @@ const Battleground = () => {
     !isCorrectlyMatchedPairsQuestion(questionLines)
   );
 
-  // ---- Question Rendering Logic ----
   const renderQuestion = (questionLines, mcq) => {
     if (!questionLines || !Array.isArray(questionLines) || !mcq) {
       return <p className="text-red-200">Error: Question content missing</p>;
@@ -534,7 +792,7 @@ const Battleground = () => {
         </div>
       );
     }
-    
+
     return (
       <div className="mb-2">
         {questionLines.map((line, index) => (
@@ -544,89 +802,271 @@ const Battleground = () => {
     );
   };
 
-  // --- Full-Screen Results Page ---
   if (showResultsPage) {
     const { totalQuestions, attempted, answeredCorrectly, answeredIncorrectly, unattempted, totalScore, percentage } = scoreDetails;
     const passed = parseFloat(percentage) >= PRELIMS_CUTOFF;
     const cutoffDifference = Math.abs(parseFloat(percentage) - PRELIMS_CUTOFF).toFixed(2);
 
     return (
-      <div className="min-h-screen h-screen bg-gray-900 text-white font-poppins flex flex-col">
-        <header className="flex-shrink-0 flex justify-between items-center p-4 sm:p-6 bg-gray-900/80 backdrop-blur-sm z-10">
-          <button
-            onClick={() => setShowResultsPage(false)}
-            className="flex items-center gap-2 text-blue-400 hover:text-blue-300 font-semibold transition-colors duration-300"
+      <div className="min-h-screen bg-gray-900 text-white font-poppins flex flex-col">
+        <main className="flex flex-col min-h-[100dvh] bg-gray-800">
+          <style>
+            {`
+              @media (max-width: 639px) {
+                .results-container {
+                  touch-action: pan-y;
+                  border-bottom-left-radius: 24px;
+                  border-bottom-right-radius: 24px;
+                  overflow-y: auto;
+                  min-height: calc(100dvh - 16px);
+                  padding-top: env(safe-area-inset-top);
+                }
+                .results-content {
+                  display: flex;
+                  flex-direction: column;
+                  min-height: calc(100dvh - 16px);
+                  background: rgba(31, 37, 47, 0.95);
+                  backdrop-filter: blur(10px);
+                }
+                .test-complete {
+                  min-height: 35vh;
+                  z-index: 10;
+                }
+                .leaderboard {
+                  flex: 1;
+                  background: rgb(17, 24, 39);
+                }
+                .popup {
+                  transition: transform 0.3s ease-out;
+                  z-index: 20;
+                  background: rgba(31, 37, 47, 0.95);
+                  backdrop-filter: blur(10px);
+                  border-top-left-radius: 16px;
+                  border-top-right-radius: 16px;
+                }
+                 .question-upbar {
+                    width: 30%; /* EXAMPLE: Changed from 35% for a narrower mobile view */
+                    clip-path: polygon(
+                      5% 0%,
+                      95% 0%,
+                      100% 100%,
+                      0% 100%
+                    );
+                 }
+              }
+              @media (min-width: 640px) {
+                .popup {
+                  transition: transform 0.3s ease-out;
+                  z-index: 20;
+                  background: rgba(31, 37, 47, 0.95);
+                  backdrop-filter: blur(10px);
+                  border-top-left-radius: 24px;
+                  border-top-right-radius: 24px;
+                }
+              }
+              .question-upbar {
+                  background-color: grey;
+                  padding: 15px 20px;
+                  display: flex;
+                  justify-content: center;
+                  align-items: center;
+                  position: fixed;
+                  bottom: 0;
+                  left: 50%;
+                  transform: translateX(-50%);
+                  z-index: 50;
+                  width: 100%;
+                  border-top-left-radius: 12px;
+                  border-top-right-radius: 12px;
+                  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+                  clip-path: polygon(
+                    0% 100%, 0% 76%, 45% 76%, 48% 0%,
+                    52% 0%, 55% 76%, 100% 76%, 100% 100%
+                  );
+                }
+               .question-upbar svg {
+                  width: 30px;
+                  height: 30px;
+                  fill: black;
+                  cursor: pointer;
+                }
+              @media (forced-colors: active) {
+                .glass-button, .glass-timer, .question-upbar, .popup {
+                  border: 1px solid;
+                }
+              }
+            `}
+          </style>
+          <div
+            ref={resultsRef}
+            className="results-container mt-4 mx-2 sm:mt-0 sm:mx-0 sm:flex sm:flex-col sm:h-full"
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
           >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"></path></svg>
-            <span>Back to Solutions</span>
-          </button>
-          <button
-            onClick={handleGoBack}
-            className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow-lg transition-transform transform hover:scale-105 duration-300"
-          >
-            Exit Battleground
-          </button>
-        </header>
-
-        <main className="flex-grow overflow-y-auto bg-gray-800">
-          <div className="bg-gray-800 p-6 sm:p-8 text-center">
-            <h1 className="text-3xl sm:text-4xl font-bold text-blue-400 mb-2">Test Complete!</h1>
-            <p className="text-gray-300 mb-4">Here's your performance summary.</p>
-            <div className={`p-4 rounded-lg mb-6 max-w-2xl mx-auto ${passed ? 'bg-green-900/50' : 'bg-red-900/50'}`}>
-              <p className="text-xl sm:text-2xl font-bold">{`Your Score: ${totalScore}`}</p>
-              <p className="text-lg text-gray-200">{`Percentage: ${percentage}%`}</p>
-              <p className={`mt-2 font-semibold ${passed ? 'text-green-400' : 'text-red-400'}`}>
-                {passed ? `🎉 Congratulations! You are above the prelims cutoff by ${cutoffDifference}%.` : `Below the prelims cutoff by ${cutoffDifference}%. Keep practicing!`}
-              </p>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 text-white max-w-4xl mx-auto">
-              <div className="bg-gray-700 p-3 rounded-lg">
-                <p className="text-2xl font-bold">{totalQuestions}</p><p className="text-sm text-gray-400">Total</p>
-              </div>
-              <div className="bg-gray-700 p-3 rounded-lg">
-                <p className="text-2xl font-bold">{attempted}</p><p className="text-sm text-gray-400">Attempted</p>
-              </div>
-              <div className="bg-green-700 p-3 rounded-lg">
-                <p className="text-2xl font-bold">{answeredCorrectly}</p><p className="text-sm text-green-200">Correct</p>
-              </div>
-              <div className="bg-red-700 p-3 rounded-lg">
-                <p className="text-2xl font-bold">{answeredIncorrectly}</p><p className="text-sm text-red-200">Incorrect</p>
-              </div>
-              <div className="bg-yellow-700 p-3 rounded-lg col-span-2 md:col-span-1">
-                <p className="text-2xl font-bold">{unattempted}</p><p className="text-sm text-yellow-200">Unattempted</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-gray-900 p-6 sm:p-8">
-            <div className="max-w-4xl mx-auto">
-              <h3 className="text-xl sm:text-2xl font-semibold text-gray-50 mb-4 text-center">
-                Leaderboard
-              </h3>
-              {leaderboard.length > 0 ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-zinc-300 text-sm sm:text-base">
-                    <thead>
-                      <tr className="border-b-2 border-gray-700">
-                        <th className="px-2 sm:px-4 py-2 text-blue-300">Rank</th>
-                        <th className="px-2 sm:px-4 py-2 text-blue-300">Username</th>
-                        <th className="px-2 sm:px-4 py-2 text-blue-300">Score</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {leaderboard.map((entry, index) => (
-                        <tr key={index} className={`border-b border-gray-700 ${user.username === entry.username ? 'bg-blue-900/50' : ''}`}>
-                          <td className="px-2 sm:px-4 py-3 font-bold">{index + 1}</td>
-                          <td className="px-2 sm:px-4 py-3">{entry.username}</td>
-                          <td className="px-2 sm:px-4 py-3">{entry.score}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+            <div className="results-content sm:bg-transparent sm:backdrop-filter-none">
+              <div className="test-complete p-2 sm:p-4 text-center">
+                <div className="hidden sm:flex sm:justify-between sm:items-center sm:mb-2">
+                  <button
+                    onClick={handleReturnToSolutions}
+                    className="flex items-center gap-2 text-blue-400 hover:text-blue-300 font-semibold transition-colors duration-300"
+                  >
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
+                    </svg>
+                    <span>Back to Solutions</span>
+                  </button>
+                  <h1 className="text-2xl font-bold text-blue-400">Test Complete!</h1>
+                  <div className="w-[140px]"></div>
                 </div>
-              ) : (
-                <p className="text-zinc-400 text-center text-sm sm:text-base">Leaderboard is currently empty.</p>
-              )}
+                <svg
+                  className="absolute top-2 left-1/2 transform -translate-x-1/2 w-8 h-4 sm:hidden"
+                  viewBox="0 0 32 4"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <line x1="2" y1="2" x2="30" y2="2" stroke="white" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                <div className="flex flex-col items-center gap-1 mt-6 sm:mt-0 sm:flex-row sm:justify-between sm:items-center sm:hidden">
+                  <h1 className="text-lg font-bold text-blue-400">Test Complete!</h1>
+                </div>
+                <p className="text-sm sm:text-base text-gray-300 mb-0 sm:mb-1">Here's your performance summary for {totalQuestions}-question test.</p>
+                <div className={`p-1 sm:p-2 rounded-lg mb-1 sm:mb-2 max-w-sm mx-auto ${passed ? 'bg-green-900/50' : 'bg-red-900/50'}`}>
+                  <p className="text-sm sm:text-lg font-bold">{`Your Score: ${totalScore}`}</p>
+                  <p className="text-xs sm:text-sm text-gray-200">{`Percentage: ${percentage}%`}</p>
+                  <p className={`mt-0.5 font-semibold Footnote sm:text-xs ${passed ? 'text-green-400' : 'text-red-400'}`}>
+                    {passed ? `🎉 Congratulations! You are above the prelims cutoff by ${cutoffDifference}%.` : `Below the prelims cutoff by ${cutoffDifference}%. Keep practicing!`}
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-0.5 sm:gap-1 text-white max-w-full sm:max-w-2xl mx-auto">
+                  <div className="bg-gray-700 p-0.5 sm:p-1 rounded-lg">
+                    <p className="text-sm sm:text-base font-bold">{totalQuestions}</p><p className="text-[8px] sm:text-[10px] text-gray-400">Total</p>
+                  </div>
+                  <div className="bg-gray-700 p-0.5 sm:p-1 rounded-lg">
+                    <p className="text-sm sm:text-base font-bold">{attempted}</p><p className="text-[8px] sm:text-[10px] text-gray-400">Attempted</p>
+                  </div>
+                  <div className="bg-green-700 p-0.5 sm:p-1 rounded-lg">
+                    <p className="text-sm sm:text-base font-bold">{answeredCorrectly}</p><p className="text-[8px] sm:text-[10px] text-green-200">Correct</p>
+                  </div>
+                  <div className="bg-red-700 p-0.5 sm:p-1 rounded-lg">
+                    <p className="text-sm sm:text-base font-bold">{answeredIncorrectly}</p><p className="text-[8px] sm:text-[10px] text-red-200">Incorrect</p>
+                  </div>
+                  <div className="bg-yellow-700 p-0.5 sm:p-1 rounded-lg col-span-2 md:col-span-1">
+                    <p className="text-sm sm:text-base font-bold">{unattempted}</p><p className="text-[8px] sm:text-[10px] text-yellow-200">Unattempted</p>
+                  </div>
+                </div>
+              </div>
+              <div className="leaderboard p-2 sm:p-4">
+                <div className="max-w-full sm:max-w-2xl mx-auto">
+                  <h3 className="text-lg sm:text-2xl font-semibold text-gray-50 mb-2 sm:mb-4 text-center">
+                    Leaderboard ({totalQuestions} Questions)
+                  </h3>
+                  {leaderboard.length > 0 ? (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-zinc-300 text-[8px] sm:text-xs">
+                        <thead>
+                          <tr className="border-b-2 border-gray-700">
+                            <th className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5 text-blue-300">Rank</th>
+                            <th className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5 text-blue-300">Username</th>
+                            <th className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5 text-blue-300">Score</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {leaderboard.map((entry, index) => (
+                            <tr key={index} className={`border-b border-gray-700 ${user.username === entry.username ? 'bg-blue-900/50' : ''}`}>
+                              <td className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5 font-bold">{index + 1}</td>
+                              <td className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5">{entry.username}</td>
+                              <td className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5">{entry.score.toFixed(2)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <p className="text-zinc-400 text-[8px] sm:text-xs mb-2">Leaderboard for {totalQuestions}-question test is currently empty.</p>
+                      <button
+                        onClick={() => fetchLeaderboard()}
+                        className="bg-blue-600 text-white px-4 py-1 rounded-full text-xs hover:bg-blue-700"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="question-upbar" onClick={() => setShowPopup(prev => !prev)}>
+                <svg
+                  className="w-10 h-10 text-white hover:text-gray-300 transition-colors duration-200 cursor-pointer"
+                  viewBox="0 0 40 50"
+                  fill="none"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <line x1="0" y1="6" x2="40" y2="6" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
+                  <line x1="0" y1="18" x2="40" y2="18" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
+                  <line x1="0" y1="30" x2="40" y2="30" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
+                </svg>
+              </div>
+
+              <div
+                className={`popup fixed bottom-0 left-0 w-full h-[50vh] shadow-lg overflow-y-auto ${
+                  showPopup ? 'translate-y-0' : 'translate-y-full'
+                  }`}
+              >
+                <div className="p-4 sm:p-6 flex flex-col items-center">
+                  <h3 className="text-3xl sm:text-4xl font-semibold text-gray-50 mb-8 -mt-2 whitespace-nowrap">
+                    Battleground Domain
+                  </h3>
+                  <div className="flex justify-between w-full gap-2 mb-32 px-4">
+                    {[10, 25, 50, 100].map((count) => {
+                      const isSelected = selectedQuestionCount === count;
+                      let buttonClass = `flex-1 px-4 py-2 rounded-full text-sm sm:text-base font-medium transition-all duration-300 transform hover:scale-105 border-2 border-transparent `;
+
+                      // =========== UPDATED COLOR LOGIC BLOCK (1/2) ===========
+                      if (count === 100) { // Gold for Full Length Test
+                        buttonClass += isSelected ? 'bg-amber-500 text-black border-amber-700' : 'bg-amber-400 text-black hover:bg-amber-500 hover:border-amber-700';
+                      } else if (count === 50) { // Silver for Half Length
+                        buttonClass += isSelected ? 'bg-slate-400 text-black border-slate-600' : 'bg-slate-300 text-black hover:bg-slate-400 hover:border-slate-600';
+                      } else if (count === 25) { // Bronze for Rapid Test
+                        buttonClass += isSelected ? 'bg-orange-400 text-black border-orange-600' : 'bg-orange-300 text-black hover:bg-orange-400 hover:border-orange-600';
+                      } else { // Green for Quick Test (count of 10)
+                        buttonClass += isSelected ? 'bg-green-600 text-white border-green-800' : 'bg-green-500 text-white hover:bg-green-600 hover:border-green-800';
+                      }
+                      // ===============================================
+
+                      return (
+                        <button
+                          key={count}
+                          onClick={() => handleQuestionCountSelect(count)}
+                          className={buttonClass}
+                        >
+                          {testLabels[count]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex justify-center w-full gap-40">
+                    <button
+                      onClick={startNewTest}
+                      disabled={!selectedQuestionCount}
+                      className={`px-6 py-2 rounded-full text-sm sm:text-base font-semibold transition-all duration-300 transform border-2 border-transparent ${
+                        selectedQuestionCount
+                          ? 'bg-blue-600 text-white hover:bg-sky-200 hover:text-sky-800 hover:border-sky-600 hover:scale-105'
+                          : 'bg-gray-500 text-gray-300 cursor-not-allowed'
+                        }`}
+                    >
+                      Start Test
+                    </button>
+                    <button
+                        onClick={handleReturnToSolutions}
+                        className="px-6 py-2 rounded-full text-sm sm:text-base font-semibold transition-all duration-300 transform border-2 border-transparent bg-blue-600 text-white hover:bg-sky-200 hover:text-sky-800 hover:border-sky-600 hover:scale-105"
+                    >
+                        View Solutions
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </main>
@@ -660,42 +1100,105 @@ const Battleground = () => {
               transition: all 0.3s ease;
             }
             .question-upbar {
-              background: rgba(31, 37, 47, 0.8);
-              backdrop-filter: blur(10px);
-              border-radius: 12px;
-              padding: 6px 12px;
+              background-color: grey; /* Or any color you prefer for the bar */
+              padding: 15px 20px; /* Adjust padding as needed */
               display: flex;
+              justify-content: center;
               align-items: center;
-              gap: 8px;
-              box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-              transition: transform 0.3s ease;
+              position: fixed;
+              bottom: 0;
+              left: 50%;
+              transform: translateX(-50%);
+              z-index: 50;
+              width: 100%; /* EXAMPLE: Changed from 80% for a narrower desktop view */
+              border-top-left-radius: 12px;
+              border-top-right-radius: 12px;
+              box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+              clip-path: polygon(
+                0% 100%,
+                0% 76%,
+                45% 76%,
+                48% 0%,
+                52% 0%,
+                55% 76%,
+                100% 76%,
+                100% 100%
+              );
             }
-            .question-upbar:hover {
-              transform: scale(1.05);
+
+            @media (max-width: 639px) {
+              .question-upbar {
+                width: 30%; /* EXAMPLE: Changed from 35% for a narrower mobile view */
+                clip-path: polygon(
+                  5% 0%,
+                  95% 0%,
+                  100% 100%,
+                  0% 100%
+                );
+              }
+            }
+
+            /* Style for the icon inside (if you are using the three lines SVG) */
+            .question-upbar svg {
+              width: 30px; /* Adjust icon size as needed */
+              height: 30px;
+              fill: black; /* Adjust icon color as needed */
+              cursor: pointer;
+            }
+
+            /* Style for the icon inside (if you are using the three lines SVG) */
+            .question-upbar svg {
+              width: 30px; /* Adjust icon size as needed */
+              height: 30px;
+              fill: black; /* Adjust icon color as needed */
+              cursor: pointer;
+            }
+            .question-upbar button {
+              padding: 0;
+              background: none;
+              border: none;
+              transition: opacity 0.3s ease;
             }
             .question-upbar svg {
-              width: 16px;
-              height: 16px;
+              width: 24px;
+              height: 24px;
+              transition: color 0.2s ease;
             }
-            .question-upbar select {
-              background: rgba(55, 65, 81, 0.9);
-              color: white;
+            .question-upbar button:hover svg {
+              color: #d1d5db;
+            }
+            .filter-bar::-webkit-scrollbar {
+              height: 4px;
+            }
+            .filter-bar::-webkit-scrollbar-track {
+              background: transparent;
+            }
+            .filter-bar::-webkit-scrollbar-thumb {
+              background: #4b5563;
+              border-radius: 2px;
               border: none;
-              border-radius: 8px;
-              padding: 4px 8px;
-              font-size: 0.875rem;
-              cursor: pointer;
-              outline: none;
-              appearance: none;
-              transition: background 0.3s ease;
             }
-            .question-upbar select:hover {
-              background: rgba(75, 85, 99, 0.9);
+            .filter-bar {
+              scrollbar-width: thin;
+              scrollbar-color: #4b5563 transparent;
+            }
+            .popup {
+              transition: transform 0.3s ease-out;
+              z-index: 20;
+              background: rgba(31, 37, 47, 0.95);
+              backdrop-filter: blur(10px);
+              border-top-left-radius: 16px;
+              border-top-right-radius: 16px;
             }
             @media (min-width: 640px) {
-              .question-upbar select {
-                font-size: 1rem;
-                padding: 6px 10px;
+              .popup {
+                border-top-left-radius: 24px;
+                border-top-right-radius: 24px;
+              }
+            }
+            @media (forced-colors: active) {
+              .glass-button, .glass-timer, .question-upbar, .popup {
+                border: 1px solid;
               }
             }
           `}
@@ -752,7 +1255,7 @@ const Battleground = () => {
             <button
               onClick={() => {
                 setError(null);
-                fetchNewInitialMCQs();
+                fetchInitialMCQ();
               }}
               className="mt-4 bg-purple-600 text-gray-50 px-4 py-2 rounded-full shadow-lg hover:bg-purple-700 transition-transform transform hover:scale-105 duration-300"
             >
@@ -768,9 +1271,9 @@ const Battleground = () => {
             <>
               {filter !== "all" && (
                 <div
-                  className="fixed top-[4rem] left-0 w-full bg-gray-800 z-40 p-2 overflow-x-auto overflow-y-hidden flex space-x-2 items-center border-2 border-red-500"
+                  className="fixed top-[3.5rem] left-0 w-full bg-gray-800 z-40 p-2 overflow-x-auto overflow-y-hidden flex items-center filter-bar"
                   style={{
-                    height: '3rem',
+                    height: '2.5rem',
                     opacity: 1,
                     visibility: 'visible',
                     position: 'fixed'
@@ -801,7 +1304,7 @@ const Battleground = () => {
                       return (
                         <div
                           key={actualIndex}
-                          className={`flex-shrink-0 w-8 h-8 sm:w-10 sm:h-10 rounded-full ${colorClass} flex items-center justify-center text-gray-900 text-sm sm:text-base font-semibold shadow-md transition-colors duration-300 cursor-pointer`}
+                          className={`flex-shrink-0 w-6 h-6 sm:w-8 sm:h-8 rounded-full ${colorClass} flex items-center justify-center text-gray-900 text-xs sm:text-sm font-semibold shadow-md transition-colors duration-300 cursor-pointer`}
                           onClick={() => {
                             if (actualIndex < questions.length) {
                               setCurrentQuestionIndex(actualIndex);
@@ -819,10 +1322,10 @@ const Battleground = () => {
               )}
 
               <div
-                className="fixed left-0 w-full z-60 px-3 sm:px-4 lg:px-6 question-box bg-gray-900"
+                className="fixed left-0 w-full z-5 px-3 sm:px-4 lg:px-6 question-box"
                 style={{
-                  top: '4rem',
-                  height: 'calc((100dvh - 8rem) * 0.5)',
+                  top: filter !== 'all' ? 'calc(3.5rem + 2.5rem)' : '3.5rem',
+                  height: filter !== 'all' ? 'calc((100dvh - 8rem - 2.5rem) * 0.5)' : 'calc((100dvh - 8rem) * 0.5)',
                 }}
                 onClick={() => score !== null && setShowExplanation(!showExplanation)}
               >
@@ -837,9 +1340,9 @@ const Battleground = () => {
               </div>
 
               <div
-                className="absolute left-0 w-full bg-gray-900 z-20 px-2 sm:px-8 lg:px-6"
+                className="absolute left-0 w-full bg-gray-900 z-20 px-2 sm:px-8 lg:px-2"
                 style={{
-                  top: 'calc(4rem + (100dvh - 8rem) * 0.5)',
+                  top: filter !== 'all' ? 'calc(3.5rem + 2.5rem + (100dvh - 8rem - 2.5rem) * 0.5)' : 'calc(3.5rem + (100dvh - 8rem) * 0.5)',
                   bottom: '4rem',
                 }}
               >
@@ -869,11 +1372,11 @@ const Battleground = () => {
                       return (
                         <button
                           key={key}
-                          onClick={() => handleOptionSelect(key)}
+                          onClick={(e) => handleOptionSelect(key, e)}
                           className={`${baseClassName} ${stateClassName}`}
                           disabled={score !== null}
                         >
-                          <span className="font-medium mr-2">{key})</span> {option}
+                          <span className="font-medium mr-2">{key}) {option}</span>
                           {score !== null && isUserAnswer && !isCorrectAnswer && (
                             <span className="ml-2 text-red-300 font-medium text-[10px] sm:text-xs">(Wrong Answer)</span>
                           )}
@@ -902,57 +1405,116 @@ const Battleground = () => {
                 )}
               </div>
 
-              <button
-                onClick={handlePreviousQuestion}
-                disabled={currentQuestionIndex === 0}
-                className={`fixed bottom-2.5 left-2 px-6 py-1.5 text-sm sm:text-base rounded-full shadow-xl transition-transform transform hover:scale-105 duration-300 z-50 ${
-                  currentQuestionIndex === 0
-                    ? "bg-gray-400 text-gray-200 cursor-not-allowed border border-gray-300"
-                    : "bg-red-700 text-white hover:bg-red-800 border border-red-700"
-                } focus:outline-none focus:ring-2 focus:ring-blue-400`}
-                style={{ boxShadow: "0 2px 16px rgba(0,0,0,0.18)" }}
-              >
-                Previous
-              </button>
+              {!showTestPopup && (
+                <>
+                  <button
+                    onClick={handlePreviousQuestion}
+                    disabled={currentQuestionIndex === 0}
+                    className={`fixed bottom-4 left-4 px-4 sm:px-6 py-1.5 text-sm sm:text-base rounded-lg shadow-xl transition-colors transform hover:scale-105 duration-300 z-50 ${
+                      currentQuestionIndex === 0
+                        ? "bg-gray-400 text-gray-200 cursor-not-allowed border border-gray-300"
+                        : "bg-red-700 text-white hover:bg-red-800 border border-red-700"
+                      } focus:outline-none focus:ring-2 focus:ring-blue-400`}
+                    style={{ boxShadow: "0 2px 16px rgba(0,0,0,0.18)" }}
+                  >
+                    Previous
+                  </button>
 
-              <div
-                className="fixed bottom-2.5 left-1/2 transform -translate-x-1/2 question-upbar z-50"
-              >
+                  <button
+                    onClick={() => score !== null ? handleFilteredNextQuestion() : (currentQuestionIndex === totalQuestions - 1 ? submitTest() : handleNextQuestion())}
+                    className={`fixed bottom-4 right-4 sm:right-2 px-4 sm:px-6 py-1.5 text-sm sm:text-base rounded-lg shadow-xl transition-colors transform hover:scale-105 duration-300 border border-gray-200/10 z-50 ${
+                      score !== null
+                        ? "bg-white text-gray-900 hover:bg-gray-100"
+                        : currentQuestionIndex === totalQuestions - 1
+                          ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                          : "bg-white text-gray-900 hover:bg-gray-100"
+                      } focus:outline-none focus:ring-2 focus:ring-blue-400`}
+                    style={{ boxShadow: "0 2px 16px rgba(0,0,0,0.18)" }}
+                  >
+                    {score !== null ? "Next" : currentQuestionIndex === totalQuestions - 1 ? "Submit" : "Next"}
+                  </button>
+                </>
+              )}
+
+              <div className="question-upbar" onClick={() => setShowTestPopup(prev => !prev)}>
                 <svg
+                  className="w-10 h-10 text-white hover:text-gray-300 transition-colors duration-200 cursor-pointer"
+                  viewBox="0 0 40 50"
                   fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  viewBox="0 0 24 24"
                   xmlns="http://www.w3.org/2000/svg"
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
+                  <line x1="0" y1="6" x2="40" y2="6" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
+                  <line x1="0" y1="18" x2="40" y2="18" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
+                  <line x1="0" y1="30" x2="40" y2="30" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
                 </svg>
-                <select
-                  id="question-count-select"
-                  onChange={(e) => handleQuestionCountSelect(e.target.value)}
-                  className="text-gray-50"
-                >
-                  <option value="">Questions</option>
-                  <option value="25">25</option>
-                  <option value="50">50</option>
-                  <option value="100">100</option>
-                </select>
               </div>
 
-              <button
-                onClick={currentQuestionIndex === totalQuestions - 1 ? submitTest : handleNextQuestion}
-                disabled={score !== null}
-                className={`fixed bottom-2.5 right-2 px-6 py-1.5 text-sm sm:text-base rounded-full shadow-xl transition-transform transform hover:scale-105 duration-300 border border-white/10 z-50 ${
-                  score !== null
-                    ? "bg-gray-300 text-gray-400 cursor-not-allowed"
-                    : currentQuestionIndex === totalQuestions - 1
-                      ? "bg-emerald-600 text-white hover:bg-emerald-700"
-                      : "bg-white text-black hover:bg-gray-100"
-                } focus:outline-none focus:ring-2 focus:ring-blue-400`}
-                style={{ boxShadow: "0 2px 16px rgba(0,0,0,0.18)" }}
+              <div
+                className={`popup fixed bottom-0 left-0 w-full h-[50vh] shadow-lg overflow-y-auto ${
+                  showTestPopup ? 'translate-y-0' : 'translate-y-full'
+                  }`}
               >
-                {currentQuestionIndex === totalQuestions - 1 ? "Submit" : "Next"}
-              </button>
+                <div className="p-4 sm:p-6 flex flex-col items-center">
+                  <h3 className="text-3xl sm:text-4xl font-semibold text-gray-50 mb-8 -mt-2 whitespace-nowrap">
+                    Battleground Domain
+                  </h3>
+                  <div className="flex justify-between w-full gap-2 mb-32 px-4">
+                    {[10, 25, 50, 100].map((count) => {
+                      const isSelected = selectedQuestionCount === count;
+                      let buttonClass = `flex-1 px-4 py-2 rounded-full text-sm sm:text-base font-medium transition-all duration-300 transform hover:scale-105 border-2 border-transparent `;
+
+                      // =========== UPDATED COLOR LOGIC BLOCK (2/2) ===========
+                      if (count === 100) { // Gold for Full Length Test
+                        buttonClass += isSelected ? 'bg-amber-500 text-black border-amber-700' : 'bg-amber-400 text-black hover:bg-amber-500 hover:border-amber-700';
+                      } else if (count === 50) { // Silver for Half Length
+                        buttonClass += isSelected ? 'bg-slate-400 text-black border-slate-600' : 'bg-slate-300 text-black hover:bg-slate-400 hover:border-slate-600';
+                      } else if (count === 25) { // Bronze for Rapid Test
+                        buttonClass += isSelected ? 'bg-orange-400 text-black border-orange-600' : 'bg-orange-300 text-black hover:bg-orange-400 hover:border-orange-600';
+                      } else { // Green for Quick Test (count of 10)
+                        buttonClass += isSelected ? 'bg-green-600 text-white border-green-800' : 'bg-green-500 text-white hover:bg-green-600 hover:border-green-800';
+                      }
+                      // ===============================================
+
+                      return (
+                        <button
+                          key={count}
+                          onClick={() => handleQuestionCountSelect(count)}
+                          className={buttonClass}
+                        >
+                          {testLabels[count]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex justify-center w-full gap-40">
+                    <button
+                      onClick={startNewTest}
+                      disabled={!selectedQuestionCount}
+                      className={`px-6 py-2 rounded-full text-sm sm:text-base font-semibold transition-all duration-300 transform border-2 border-transparent ${
+                        selectedQuestionCount
+                          ? 'bg-blue-600 text-white hover:bg-sky-200 hover:text-sky-800 hover:border-sky-600 hover:scale-105'
+                          : 'bg-gray-500 text-gray-300 cursor-not-allowed'
+                        }`}
+                    >
+                      Start Test
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowTestPopup(false);
+                        setShowResultsPage(true);
+                      }}
+                      disabled={score === null}
+                      className={`px-6 py-2 rounded-full text-sm sm:text-base font-semibold transition-all duration-300 transform border-2 border-transparent ${
+                        score !== null
+                          ? 'bg-blue-600 text-white hover:bg-sky-200 hover:text-sky-800 hover:border-sky-600 hover:scale-105'
+                          : 'bg-gray-500 text-gray-300 cursor-not-allowed'
+                        }`}
+                    >
+                      View Results
+                    </button>
+                  </div>
+                </div>
+              </div>
             </>
           ) : testStarted && questions.length > 0 ? (
             <div className="p-4 bg-red-600 border border-gray-700 rounded-lg mx-auto max-w-sm sm:max-w-md text-center">
@@ -970,7 +1532,7 @@ const Battleground = () => {
               <button
                 onClick={() => {
                   setError(null);
-                  fetchNewInitialMCQs();
+                  fetchInitialMCQ();
                 }}
                 className="mt-4 bg-blue-600 text-white px-4 py-1.5 text-sm sm:text-base rounded-full shadow-lg hover:bg-blue-700 transition-transform transform duration-300"
               >
@@ -984,95 +1546,116 @@ const Battleground = () => {
       {!testStarted && !loading && !error && (
         <div className="fixed top-16 left-0 right-0 bottom-0 z-[999] flex items-center justify-center bg-gray-900">
           <div className="p-4 bg-gray-800 border border-gray-700 rounded-lg mx-auto max-w-sm sm:max-w-md text-center">
-            <p className="text-sm sm:text-base text-gray-200 font-semibold">Loading test... Please wait.</p>
+            <p className="text-sm sm:text-base text-gray-200 font-semibold">Select a test to start.</p>
             <button
-              onClick={() => resetTest(totalQuestions)}
+              onClick={() => setShowTestPopup(true)}
               className="mt-4 bg-blue-600 text-white px-4 py-1.5 text-sm sm:text-base rounded-full shadow-lg hover:bg-blue-700 transition-transform transform duration-300"
             >
-              Start Test
+              Choose Test
             </button>
           </div>
         </div>
       )}
-      
+
       {testStarted && (
         <div
-          className="fixed top-16 right-0 h-[calc(100vh-4rem)] w-64 sm:w-72 bg-gray-800 shadow-lg z-[9999] transition-all duration-300 ease-in-out"
+          className="fixed top-0 right-0 h-[100vh] w-64 sm:w-72 bg-gray-800 shadow-lg z-[9999] transition-all duration-300 ease-in-out"
           style={{ right: showSidebar ? "0" : "-288px" }}
         >
           <div className="p-4 sm:p-6 h-full flex flex-col relative">
-            {score !== null && (
-              <button
-                onClick={() => setShowResultsPage(true)}
-                className="bg-blue-600 text-white px-3 py-1.5 text-sm sm:text-base rounded-md hover:bg-blue-700 transition-transform duration-300 mb-4"
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleSidebar();
+              }}
+              className="absolute top-4 right-4 text-white hover:text-gray-300 transition-colors duration-200 p-2 pointer-events-auto z-20"
+              aria-label="Close Sidebar"
+            >
+              <svg
+                className="w-6 h-6"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                xmlns="http://www.w3.org/2000/svg"
               >
-                View Results
-              </button>
-            )}
-            <div className="mb-4 z-10">
-              <label className="block text-xs sm:text-sm font-semibold text-blue-300 mb-1" htmlFor="sidebar-filter-select">
-                Filter
-              </label>
-              <select
-                id="sidebar-filter-select"
-                value={filter}
-                onChange={(e) => handleFilterChange(e.target.value)}
-                className="w-full text-gray-50 bg-gray-700 px-4 py-1.5 text-sm sm:text-base rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 transition-all duration-200"
-              >
-                <option value="all">All Questions</option>
-                <option value="correct">Correct Answers</option>
-                <option value="wrong">Wrong Answers</option>
-                <option value="unattempted">Unattempted</option>
-              </select>
-            </div>
-
-            <div className="flex-1 overflow-y-auto">
-              <h3 className={`text-sm sm:text-base font-semibold text-white mb-2 p-2 rounded-lg ${filter === "wrong" ? "bg-red-500" : "bg-gray-700"}`}>
-                Question Progress
-              </h3>
-              <div className="grid grid-cols-5 gap-2">
-                {Array.from({ length: totalQuestions }).map((_, actualIndex) => {
-                  const status = questionStatuses[actualIndex] || "unattempted";
-                  const isCurrent = actualIndex === currentQuestionIndex && !showExplanation;
-                  let colorClass = score !== null
-                    ? status === "correct"
-                      ? "bg-green-500"
-                      : status === "wrong"
-                        ? "bg-red-500"
-                        : "bg-white"
-                    : actualIndex <= maxQuestionReached
-                      ? userAnswers[actualIndex]
-                        ? "bg-blue-200"
-                        : "bg-white"
-                      : "bg-gray-200";
-                  
-                  if (isCurrent && score !== null) {
-                    colorClass = `${colorClass} ring-2 ring-white`;
-                  }
-
-                  return (
-                    <div
-                      key={actualIndex}
-                      className={`w-9 h-9 sm:w-10 sm:h-10 rounded-lg ${colorClass} flex items-center justify-center text-gray-900 text-xs sm:text-sm font-semibold shadow-md transition-transform duration-200 cursor-pointer hover:scale-105`}
-                      onClick={() => {
-                        if (actualIndex < questions.length) {
-                          setCurrentQuestionIndex(actualIndex);
-                          setSelectedOption(userAnswers[actualIndex] || "");
-                          setShowExplanation(false);
-                        }
-                      }}
-                    >
-                      {actualIndex + 1}
-                    </div>
-                  );
-                })}
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            {score !== null ? (
+              <div className="mt-8 mb-4 z-10">
+                <label className="block text-xs sm:text-sm font-semibold text-blue-300 mb-1" htmlFor="sidebar-filter-select">
+                  Filter
+                </label>
+                <select
+                  id="sidebar-filter-select"
+                  value={filter}
+                  onChange={(e) => handleFilterChange(e.target.value)}
+                  className="w-full text-gray-50 bg-gray-700 px-4 py-1.5 text-sm sm:text-base rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400 transition-all duration-200"
+                >
+                  <option value="all">All Questions</option>
+                  <option value="correct">Correct Answers</option>
+                  <option value="wrong">Wrong Answers</option>
+                  <option value="unattempted">Unattempted</option>
+                </select>
               </div>
-              {score === null && (
+            ) : (
+              <div className="h-[6.5rem]" />
+            )}
+
+            <div className="flex-1 flex flex-col relative">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(1.75rem,1fr))] gap-1 sm:gap-1.5 mb-4">
+                {Array.from({ length: totalQuestions })
+                  .map((_, i) => i)
+                  .filter(i => filter === "all" || questionStatuses[i] === filter)
+                  .map((actualIndex) => {
+                    const status = questionStatuses[actualIndex] || "unattempted";
+                    const isCurrent = actualIndex === currentQuestionIndex && !showExplanation;
+                    let colorClass = score !== null
+                      ? status === "correct"
+                        ? "bg-green-500"
+                        : status === "wrong"
+                          ? "bg-red-500"
+                          : "bg-white"
+                      : actualIndex <= maxQuestionReached
+                        ? userAnswers[actualIndex]
+                          ? "bg-blue-200"
+                          : "bg-white"
+                        : "bg-gray-200";
+
+                    if (isCurrent && score !== null) {
+                      colorClass = `${colorClass} ring-2 ring-white`;
+                    }
+
+                    return (
+                      <div
+                        key={actualIndex}
+                        className={`w-5 h-5 sm:w-6 sm:h-6 rounded-md ${colorClass} flex items-center justify-center text-gray-900 text-[9px] sm:text-[10px] font-semibold shadow-sm transition-transform duration-200 cursor-pointer hover:scale-105`}
+                        onClick={() => {
+                          if (actualIndex < questions.length) {
+                            setCurrentQuestionIndex(actualIndex);
+                            setSelectedOption(userAnswers[actualIndex] || "");
+                            setShowExplanation(false);
+                          }
+                        }}
+                      >
+                        {actualIndex + 1}
+                      </div>
+                    );
+                  })}
+              </div>
+              {score === null ? (
                 <button
                   onClick={submitTest}
-                  className="w-full mt-4 px-4 py-1.5 text-sm sm:text-base rounded-full shadow-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 transition-transform duration-300 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  className="w-full px-4 py-1.5 text-sm sm:text-base rounded-full shadow-lg bg-emerald-600 text-white font-semibold hover:bg-emerald-700 transition-transform duration-300 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-400 absolute bottom-2 left-0 right-0 mx-4 sm:mx-6"
                 >
                   Submit Test
+                </button>
+              ) : (
+                <button
+                  onClick={() => setShowResultsPage(true)}
+                  className="w-full px-4 py-1.5 text-sm sm:text-base rounded-full shadow-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 transition-transform duration-300 transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-400 absolute bottom-2 left-0 right-0 mx-4 sm:mx-6"
+                >
+                  View Results
                 </button>
               )}
             </div>
