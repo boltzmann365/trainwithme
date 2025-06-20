@@ -10,7 +10,8 @@ const CurrentAffairs = () => {
   const { user } = useAuth();
 
   const BOOKS = [
-    { name: "Vision IAS December 2024", path: "/vision-ias-dec-2024", image: visionIasImage },
+    { name: "Vision IAS April 2025", path: "/vision-ias-dec-2024", image: visionIasImage },
+    { name: "Vision IAS May 2025", path: "/vision-ias-may-2025", image: visionIasImage },
     // Add more books in the future, e.g., { name: "Another Book", path: "/another-book" }
   ];
 

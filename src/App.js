@@ -1,3 +1,5 @@
+// =================== START: REPLACE YOUR ENTIRE APP.JS FILE WITH THIS ===================
+
 import React, { createContext, useState, useContext, useEffect, useRef } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { GoogleOAuthProvider, GoogleLogin } from "@react-oauth/google";
@@ -24,6 +26,7 @@ import ShankarIas from "./pages/subjects/ShankarIas";
 import RameshSingh from "./pages/subjects/RameshSingh";
 import DishaCSAT from "./pages/subjects/DishaCSAT";
 import VisionIasDec2024 from "./pages/subjects/VisionIasDec2024";
+import VisionIasMay2025 from "./pages/subjects/VisionIasMay2025";
 import DishaIasPreviousYearPaper from "./pages/subjects/DishaIasPreviousYearPaper";
 import DishaIasScience from "./pages/subjects/DishaIasScience";
 import OneLiner from "./pages/subjects/OneLiner";
@@ -76,9 +79,20 @@ export const ProfileDropdown = () => {
 };
 
 const ProtectedRoute = ({ children }) => {
-  const { user } = useAuth();
+  const { user, isInitializing } = useAuth(); // Get the new isInitializing state
   const location = useLocation();
-  return user ? children : <Navigate to="/login" state={{ from: location.pathname }} />;
+
+  // If we are still trying to load the user from localStorage, show a loader
+  if (isInitializing) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-gray-900">
+        <span className="inline-block w-12 h-12 border-4 border-blue-400 border-t-transparent rounded-full animate-spin"></span>
+      </div>
+    );
+  }
+
+  // Only after initializing, check if the user exists. If not, redirect.
+  return user ? children : <Navigate to="/login" state={{ from: location.pathname }} replace />;
 };
 
 const QandaProvider = ({ children }) => {
@@ -217,23 +231,13 @@ const QandaProvider = ({ children }) => {
   );
 };
 
-// ========================================================
-// START: MODIFICATION TO `ArticleProvider`
-// Removed the prefetching logic. Now it just provides an empty
-// state and a way to refresh, but the initial fetch is handled
-// by the NewsCard component itself.
-// ========================================================
 const ArticleProvider = ({ children }) => {
   const [articles, setArticles] = useState([]);
   const [isArticlesFetching, setIsArticlesFetching] = useState(false);
   const [articlesError, setArticlesError] = useState(null);
   const { user } = useAuth();
   
-  // The refreshArticles function is now a simple state updater that NewsCard can use
-  // if you want to implement a manual refresh button later.
   const refreshArticles = () => {
-    // This function can be built out later if a manual refresh is needed.
-    // For now, it does nothing, as NewsCard fetches on its own mount.
     console.log("Refresh triggered, NewsCard will re-fetch on its next mount.");
   };
 
@@ -243,29 +247,35 @@ const ArticleProvider = ({ children }) => {
     </ArticleContext.Provider>
   );
 };
-// ========================================================
-// END: MODIFICATION TO `ArticleProvider`
-// ========================================================
-
 
 const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [isInitializing, setIsInitializing] = useState(true);
   const API_URL = process.env.REACT_APP_API_URL || "http://localhost:3001";
 
   useEffect(() => {
-    const savedUser = localStorage.getItem("user");
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
+    try {
+        const savedUser = localStorage.getItem("user");
+        if (savedUser) {
+            setUser(JSON.parse(savedUser));
+        }
+    } catch (error) {
+        console.error("Failed to parse user from localStorage", error);
+        localStorage.removeItem("user");
+    } finally {
+        setIsInitializing(false);
     }
   }, []);
 
   useEffect(() => {
-    if (user) {
-      localStorage.setItem("user", JSON.stringify(user));
-    } else {
-      localStorage.removeItem("user");
+    if (!isInitializing) {
+        if (user) {
+            localStorage.setItem("user", JSON.stringify(user));
+        } else {
+            localStorage.removeItem("user");
+        }
     }
-  }, [user]);
+  }, [user, isInitializing]);
 
   const loginOrSignupWithGoogle = async (token) => {
     const jwtDecode = (t) => {
@@ -335,7 +345,7 @@ const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loginOrSignupWithGoogle, setUsername, logout }}>
+    <AuthContext.Provider value={{ user, isInitializing, loginOrSignupWithGoogle, setUsername, logout }}>
       {children}
     </AuthContext.Provider>
   );
@@ -373,6 +383,7 @@ function App() {
                 <Route path="/economy" element={<ProtectedRoute><Economy /></ProtectedRoute>} />
                 <Route path="/current-affairs" element={<ProtectedRoute><CurrentAffairs /></ProtectedRoute>} />
                 <Route path="/vision-ias-dec-2024" element={<ProtectedRoute><VisionIasDec2024 /></ProtectedRoute>} />
+                <Route path="/vision-ias-may-2025" element={<ProtectedRoute><VisionIasMay2025 /></ProtectedRoute>} />
                 <Route path="/previous-year-papers" element={<ProtectedRoute><PreviousYearPapers /></ProtectedRoute>} />
                 <Route path="/disha-ias-previous-year-paper" element={<ProtectedRoute><DishaIasPreviousYearPaper /></ProtectedRoute>} />
                 <Route path="/oneliners" element={<ProtectedRoute><OneLiner /></ProtectedRoute>} />
@@ -500,3 +511,5 @@ const LoginSignup = () => {
 };
 
 export default App;
+
+// =================== END: YOUR CODE REPLACEMENT ENDS HERE ===================

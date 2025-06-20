@@ -1,3 +1,5 @@
+// =================== START: REPLACE YOUR ENTIRE FILE WITH THIS ===================
+
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth, useQanda } from "../../App";
@@ -26,7 +28,6 @@ const Battleground = () => {
   const [timeLeft, setTimeLeft] = useState(6 * 60); // 6 minutes for 10 questions
   const [timerActive, setTimerActive] = useState(false);
   const [totalQuestions, setTotalQuestions] = useState(10);
-  const [showPopup, setShowPopup] = useState(false);
   const [showTestPopup, setShowTestPopup] = useState(false);
   const [selectedQuestionCount, setSelectedQuestionCount] = useState(null);
   const [isFirstReturnAfterSubmit, setIsFirstReturnAfterSubmit] = useState(false);
@@ -185,9 +186,7 @@ const Battleground = () => {
       return;
     }
     isFetchingRef.current = true;
-
     console.log("fetchRemainingMCQs: Called with desiredCount", desiredCount);
-
     try {
       let allSubjects = [
         "Polity", "TamilnaduHistory", "Spectrum", "ArtAndCulture",
@@ -201,36 +200,23 @@ const Battleground = () => {
 
       while (remainingCount > 0 && allSubjects.length > 0 && maxRetries > 0) {
         const questionsPerSubject = Math.ceil(remainingCount / allSubjects.length);
-        console.log(
-          `Attempting to fetch ${remainingCount} MCQs, ${questionsPerSubject} per subject, subjects: ${allSubjects.join(", ")}`
-        );
-
-        const books = allSubjects.map(subject => ({
-          book: subject,
-          requestedCount: questionsPerSubject
-        }));
-
+        console.log(`Attempting to fetch ${remainingCount} MCQs, ${questionsPerSubject} per subject, subjects: ${allSubjects.join(", ")}`);
+        const books = allSubjects.map(subject => ({ book: subject, requestedCount: questionsPerSubject }));
         const response = await fetch(`${API_URL}/user/get-multi-book-mcqs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ books, userId: user.email })
         });
-
         if (!response.ok) {
           const errorData = await response.json();
           console.warn(`Failed to fetch MCQs: HTTP ${response.status}`, errorData);
           throw new Error(errorData.error || `HTTP ${response.status}`);
         }
-
         const data = await response.json();
         if (!data.mcqs || data.mcqs.length === 0) {
           console.warn("No MCQs returned", data.diagnostics || []);
           break;
         }
-
-        console.log("MCQ fetch diagnostics:", data.diagnostics);
-        console.log("Raw MCQ IDs fetched:", data.mcqs.map(mcq => mcq._id?.toString()));
-
         const transformedMCQs = [];
         for (const mcq of data.mcqs) {
           if (!mcq.mcq || !mcq.mcq.question || !mcq.mcq.options || !mcq.mcq.correctAnswer || !mcq.mcq.explanation) {
@@ -252,35 +238,26 @@ const Battleground = () => {
             id: mcq._id,
           });
         }
-
         if (transformedMCQs.length > 0) {
           allMCQs = [...allMCQs, ...transformedMCQs];
           remainingCount = Math.max(desiredCount - (questions.length + allMCQs.length), 0);
         }
-
         const availableSubjects = data.diagnostics
           .filter(d => d.available > d.requested && d.available > 0 && !d.error)
           .map(d => Object.keys(categoryToBookMap).find(key => categoryToBookMap[key].category === d.category))
           .filter(Boolean);
-
         if (availableSubjects.length === 0 && remainingCount > 0) {
           console.warn("No subjects with additional MCQs available");
           break;
         }
-
         allSubjects = availableSubjects;
         maxRetries--;
-
-        console.log(
-          `Fetched ${transformedMCQs.length} unique MCQs, remaining: ${remainingCount}, retries left: ${maxRetries}, available subjects: ${allSubjects.join(", ")}`
-        );
-
+        console.log(`Fetched ${transformedMCQs.length} unique MCQs, remaining: ${remainingCount}, retries left: ${maxRetries}, available subjects: ${allSubjects.join(", ")}`);
         if (questions.length + allMCQs.length >= desiredCount) {
           console.log("Sufficient unique MCQs fetched, stopping further requests");
           break;
         }
       }
-
       const uniqueMCQs = [];
       const seenIds = new Set();
       for (const mcq of allMCQs) {
@@ -291,7 +268,6 @@ const Battleground = () => {
           console.warn(`Duplicate MCQ ID detected in final list: ${mcq.id.toString()}`);
         }
       }
-
       if (uniqueMCQs.length > 0) {
         setQuestions(prevQuestions => {
           const updatedMCQs = [...prevQuestions, ...uniqueMCQs].slice(0, desiredCount);
@@ -306,16 +282,9 @@ const Battleground = () => {
         setQuestionStatuses(prevStatuses => [...prevStatuses, ...new Array(uniqueMCQs.length).fill("unattempted")]);
         setTotalQuestions(Math.min(desiredCount, questions.length + uniqueMCQs.length));
       }
-
-      console.log("fetchRemainingMCQs: Fetched total unique MCQs", uniqueMCQs.length);
-
       if (questions.length + uniqueMCQs.length < desiredCount) {
-        const unavailableSubjects = Object.keys(categoryToBookMap).filter(
-          s => !uniqueMCQs.some(mcq => mcq.category === categoryToBookMap[s]?.category)
-        );
-        setError(
-          `Unable to load all ${desiredCount} questions (loaded ${questions.length + uniqueMCQs.length}). Subjects with insufficient questions: ${unavailableSubjects.join(", ") || "unknown"}. Try a lower question count.`
-        );
+        const unavailableSubjects = Object.keys(categoryToBookMap).filter(s => !uniqueMCQs.some(mcq => mcq.category === categoryToBookMap[s]?.category));
+        setError(`Unable to load all ${desiredCount} questions (loaded ${questions.length + uniqueMCQs.length}). Subjects with insufficient questions: ${unavailableSubjects.join(", ") || "unknown"}. Try a lower question count.`);
       }
     } catch (err) {
       console.error("Error in fetchRemainingMCQs:", err.message);
@@ -327,7 +296,6 @@ const Battleground = () => {
 
   useEffect(() => {
     console.log("Battleground: Initial state", { user, testStarted, loading, error });
-    console.log("User object:", user);
     if (user && user.email) {
       fetchInitialMCQ();
     } else {
@@ -365,22 +333,16 @@ const Battleground = () => {
       console.error("markMcqAsSeen: Invalid parameters", { user: !!user, email: user?.email, mcqId });
       return;
     }
-
     try {
       const response = await fetch(`${API_URL}/user/mark-mcq-seen`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: user.email,
-          mcqId,
-        }),
+        body: JSON.stringify({ userId: user.email, mcqId }),
       });
-
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || `HTTP ${response.status}`);
       }
-
       const data = await response.json();
       if (data.success) {
         console.log(`MCQ ${mcqId} marked as seen for user ${user.email}`);
@@ -418,11 +380,12 @@ const Battleground = () => {
     };
   }, [currentQuestionIndex, testStarted, user]);
 
-  const formatTime = (seconds) => {
-    const minutes = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${minutes}:${secs < 10 ? "0" : ""}${secs}`;
-  };
+  // THE CORRECT CODE
+const formatTime = (seconds) => {
+  const minutes = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${minutes}:${secs < 10 ? "0" : ""}${secs}`;
+};
 
   const handleGoBack = () => {
     fetchNewInitialMCQs();
@@ -443,9 +406,8 @@ const Battleground = () => {
       setLeaderboard([]);
       return;
     }
-
     try {
-      const res = await fetch(`${API_URL}/battleground/leaderboard?questionCount=${totalQuestions}`, {
+      const res = await fetch(`<span class="math-inline">\{API\_URL\}/battleground/leaderboard?questionCount\=</span>{totalQuestions}`, {
         headers: { "Content-Type": "application/json" },
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -480,10 +442,8 @@ const Battleground = () => {
         const style = window.getComputedStyle(questionNumber);
         pElementsHeight += questionNumber.offsetHeight + parseFloat(style.marginBottom);
       }
-
       const paddingHeight = 16;
       const effectiveHeight = questionBox.clientHeight - pElementsHeight - paddingHeight;
-
       let currentFontSize = 24;
       content.style.fontSize = `${currentFontSize}px`;
       while (content.scrollHeight > effectiveHeight && currentFontSize > 8) {
@@ -519,12 +479,8 @@ const Battleground = () => {
   };
 
   const handleNextQuestion = () => {
-    if (
-      currentQuestionIndex >= totalQuestions - 1 ||
-      currentQuestionIndex >= questions.length - 1
-    )
+    if (currentQuestionIndex >= totalQuestions - 1 || currentQuestionIndex >= questions.length - 1)
       return;
-
     const nextIndex = currentQuestionIndex + 1;
     setCurrentQuestionIndex(nextIndex);
     setSelectedOption(userAnswers[nextIndex] || "");
@@ -562,7 +518,6 @@ const Battleground = () => {
     let wrongCount = 0;
     let attempted = 0;
     const newStatuses = [...questionStatuses];
-
     newAnswers.forEach((answer, index) => {
       if (answer && index < questions.length) {
         attempted++;
@@ -577,16 +532,12 @@ const Battleground = () => {
         newStatuses[index] = "unattempted";
       }
     });
-
     setQuestionStatuses(newStatuses);
-
     const unattempted = questions.length - attempted;
     const totalScore = (correctCount * 2) - (wrongCount * 0.66);
     const percentage = questions.length > 0 ? (totalScore / (questions.length * 2)) * 100 : 0;
-
     setScore(totalScore);
     setTimerActive(false);
-
     setScoreDetails({
       totalQuestions: questions.length,
       attempted,
@@ -596,11 +547,8 @@ const Battleground = () => {
       totalScore: totalScore.toFixed(2),
       percentage: percentage.toFixed(2),
     });
-
     setShowResultsPage(true);
-    setShowPopup(false);
     setIsFirstReturnAfterSubmit(true);
-
     fetch(`${API_URL}/battleground/submit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -695,13 +643,12 @@ const Battleground = () => {
     console.log("startNewTest: Starting test with", selectedQuestionCount, "questions");
     setError(null);
     resetTest(selectedQuestionCount);
-    setShowPopup(false);
     setShowTestPopup(false);
   };
 
   const isTableBasedQuestion = (questionLines) => (
     questionLines &&
-    questionLines.some((line) => line.includes("      ")) &&
+    questionLines.some((line) => line.includes("   ")) &&
     questionLines.some((line) => /^\([A-D]\)/.test(line))
   );
 
@@ -728,15 +675,6 @@ const Battleground = () => {
     questionLines &&
     questionLines.some((line) => line.includes("Consider the following pairs")) &&
     questionLines.some((line) => line.includes("Which of the pairs are correctly matched?"))
-  );
-
-  const isDirectQuestion = (questionLines) => (
-    questionLines &&
-    !isStatementBasedQuestion(questionLines) &&
-    !isAssertionReasonQuestion(questionLines) &&
-    !isTableBasedQuestion(questionLines) &&
-    !isChronologicalOrderQuestion(questionLines) &&
-    !isCorrectlyMatchedPairsQuestion(questionLines)
   );
 
   const renderQuestion = (questionLines, mcq) => {
@@ -810,86 +748,91 @@ const Battleground = () => {
     return (
       <div className="min-h-screen bg-gray-900 text-white font-poppins flex flex-col">
         <main className="flex flex-col min-h-[100dvh] bg-gray-800">
+          {/* Using the same styles as the test view for consistency */}
           <style>
-            {`
+            {`:root {
+              /* This is the DEFAULT (mobile) position */
+              --button-left-position: 1rem;
+              --button-right-position: 1rem;
+            }
+
+            @media (min-width: 640px) {
+              :root {
+                /* This is the OVERRIDE for big screens */
+                --button-left-position: calc(50% - 250px);
+                --button-right-position: calc(50% - 250px);
+              }
+            }
+
+              .glass-button {
+                background: transparent;
+                border: none;
+                border-radius: 8px;
+                transition: all 0.3s ease;
+                padding: 8px;
+                box-shadow: none;
+              }
+              .glass-button:hover {
+                transform: scale(1.08);
+                background: rgba(59, 130, 246, 0.08);
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+              }
+              .glass-timer {
+                background: rgba(31, 37, 47, 0.6);
+                backdrop-filter: blur(10px);
+                border-radius: 8px;
+                padding: 4px 12px;
+                transition: all 0.3s ease;
+              }
+              .question-upbar {
+                background-color: grey;
+                padding: 15px 20px;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                position: fixed;
+                bottom: 0;
+                left: 50%;
+                transform: translateX(-50%);
+                z-index: 50;
+                width: 100%;
+                border-top-left-radius: 12px;
+                border-top-right-radius: 12px;
+                box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+                clip-path: polygon(
+                  0% 100%, 0% 76%, 45% 76%, 48% 0%,
+                  52% 0%, 55% 76%, 100% 76%, 100% 100%
+                );
+              }
               @media (max-width: 639px) {
-                .results-container {
-                  touch-action: pan-y;
-                  border-bottom-left-radius: 24px;
-                  border-bottom-right-radius: 24px;
-                  overflow-y: auto;
-                  min-height: calc(100dvh - 16px);
-                  padding-top: env(safe-area-inset-top);
+                .question-upbar {
+                  width: 100%;
+                  clip-path: polygon(
+                    0% 100%, 0% 90%, 40% 90%, 44% 0%,
+                    56% 0%, 60% 90%, 100% 90%, 100% 100%
+                  );
                 }
-                .results-content {
-                  display: flex;
-                  flex-direction: column;
-                  min-height: calc(100dvh - 16px);
-                  background: rgba(31, 37, 47, 0.95);
-                  backdrop-filter: blur(10px);
-                }
-                .test-complete {
-                  min-height: 35vh;
-                  z-index: 10;
-                }
-                .leaderboard {
-                  flex: 1;
-                  background: rgb(17, 24, 39);
-                }
-                .popup {
-                  transition: transform 0.3s ease-out;
-                  z-index: 20;
-                  background: rgba(31, 37, 47, 0.95);
-                  backdrop-filter: blur(10px);
-                  border-top-left-radius: 16px;
-                  border-top-right-radius: 16px;
-                }
-                 .question-upbar {
-                    width: 30%; /* EXAMPLE: Changed from 35% for a narrower mobile view */
-                    clip-path: polygon(
-                      5% 0%,
-                      95% 0%,
-                      100% 100%,
-                      0% 100%
-                    );
-                 }
+              }
+              .popup {
+                transition: transform 0.3s ease-out;
+                z-index: 20;
+                background: rgba(31, 37, 47, 0.95);
+                backdrop-filter: blur(10px);
+                border-top-left-radius: 16px;
+                border-top-right-radius: 16px;
               }
               @media (min-width: 640px) {
                 .popup {
-                  transition: transform 0.3s ease-out;
-                  z-index: 20;
-                  background: rgba(31, 37, 47, 0.95);
-                  backdrop-filter: blur(10px);
                   border-top-left-radius: 24px;
                   border-top-right-radius: 24px;
                 }
               }
-              .question-upbar {
-                  background-color: grey;
-                  padding: 15px 20px;
-                  display: flex;
-                  justify-content: center;
-                  align-items: center;
-                  position: fixed;
-                  bottom: 0;
-                  left: 50%;
-                  transform: translateX(-50%);
-                  z-index: 50;
-                  width: 100%;
-                  border-top-left-radius: 12px;
-                  border-top-right-radius: 12px;
-                  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
-                  clip-path: polygon(
-                    0% 100%, 0% 76%, 45% 76%, 48% 0%,
-                    52% 0%, 55% 76%, 100% 76%, 100% 100%
-                  );
-                }
-               .question-upbar svg {
-                  width: 30px;
-                  height: 30px;
-                  fill: black;
-                  cursor: pointer;
-                }
+              .question-upbar svg {
+                width: 30px;
+                height: 30px;
+                fill: black;
+                cursor: pointer;
+              }
               @media (forced-colors: active) {
                 .glass-button, .glass-timer, .question-upbar, .popup {
                   border: 1px solid;
@@ -897,6 +840,7 @@ const Battleground = () => {
               }
             `}
           </style>
+
           <div
             ref={resultsRef}
             className="results-container mt-4 mx-2 sm:mt-0 sm:mx-0 sm:flex sm:flex-col sm:h-full"
@@ -911,49 +855,26 @@ const Battleground = () => {
                     onClick={handleReturnToSolutions}
                     className="flex items-center gap-2 text-blue-400 hover:text-blue-300 font-semibold transition-colors duration-300"
                   >
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
-                    </svg>
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
                     <span>Back to Solutions</span>
                   </button>
                   <h1 className="text-2xl font-bold text-blue-400">Test Complete!</h1>
                   <div className="w-[140px]"></div>
                 </div>
-                <svg
-                  className="absolute top-2 left-1/2 transform -translate-x-1/2 w-8 h-4 sm:hidden"
-                  viewBox="0 0 32 4"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  <line x1="2" y1="2" x2="30" y2="2" stroke="white" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-                <div className="flex flex-col items-center gap-1 mt-6 sm:mt-0 sm:flex-row sm:justify-between sm:items-center sm:hidden">
-                  <h1 className="text-lg font-bold text-blue-400">Test Complete!</h1>
-                </div>
+                <svg className="absolute top-2 left-1/2 transform -translate-x-1/2 w-8 h-4 sm:hidden" viewBox="0 0 32 4" fill="none" xmlns="http://www.w3.org/2000/svg"><line x1="2" y1="2" x2="30" y2="2" stroke="white" strokeWidth="2" strokeLinecap="round" /></svg>
+                <div className="flex flex-col items-center gap-1 mt-6 sm:mt-0 sm:flex-row sm:justify-between sm:items-center sm:hidden"><h1 className="text-lg font-bold text-blue-400">Test Complete!</h1></div>
                 <p className="text-sm sm:text-base text-gray-300 mb-0 sm:mb-1">Here's your performance summary for {totalQuestions}-question test.</p>
                 <div className={`p-1 sm:p-2 rounded-lg mb-1 sm:mb-2 max-w-sm mx-auto ${passed ? 'bg-green-900/50' : 'bg-red-900/50'}`}>
                   <p className="text-sm sm:text-lg font-bold">{`Your Score: ${totalScore}`}</p>
                   <p className="text-xs sm:text-sm text-gray-200">{`Percentage: ${percentage}%`}</p>
-                  <p className={`mt-0.5 font-semibold Footnote sm:text-xs ${passed ? 'text-green-400' : 'text-red-400'}`}>
-                    {passed ? `🎉 Congratulations! You are above the prelims cutoff by ${cutoffDifference}%.` : `Below the prelims cutoff by ${cutoffDifference}%. Keep practicing!`}
-                  </p>
+                  <p className={`mt-0.5 font-semibold Footnote sm:text-xs ${passed ? 'text-green-400' : 'text-red-400'}`}>{passed ? `🎉 Congratulations! You are above the prelims cutoff by ${cutoffDifference}%.` : `Below the prelims cutoff by ${cutoffDifference}%. Keep practicing!`}</p>
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-0.5 sm:gap-1 text-white max-w-full sm:max-w-2xl mx-auto">
-                  <div className="bg-gray-700 p-0.5 sm:p-1 rounded-lg">
-                    <p className="text-sm sm:text-base font-bold">{totalQuestions}</p><p className="text-[8px] sm:text-[10px] text-gray-400">Total</p>
-                  </div>
-                  <div className="bg-gray-700 p-0.5 sm:p-1 rounded-lg">
-                    <p className="text-sm sm:text-base font-bold">{attempted}</p><p className="text-[8px] sm:text-[10px] text-gray-400">Attempted</p>
-                  </div>
-                  <div className="bg-green-700 p-0.5 sm:p-1 rounded-lg">
-                    <p className="text-sm sm:text-base font-bold">{answeredCorrectly}</p><p className="text-[8px] sm:text-[10px] text-green-200">Correct</p>
-                  </div>
-                  <div className="bg-red-700 p-0.5 sm:p-1 rounded-lg">
-                    <p className="text-sm sm:text-base font-bold">{answeredIncorrectly}</p><p className="text-[8px] sm:text-[10px] text-red-200">Incorrect</p>
-                  </div>
-                  <div className="bg-yellow-700 p-0.5 sm:p-1 rounded-lg col-span-2 md:col-span-1">
-                    <p className="text-sm sm:text-base font-bold">{unattempted}</p><p className="text-[8px] sm:text-[10px] text-yellow-200">Unattempted</p>
-                  </div>
+                  <div className="bg-gray-700 p-0.5 sm:p-1 rounded-lg"><p className="text-sm sm:text-base font-bold">{totalQuestions}</p><p className="text-[8px] sm:text-[10px] text-gray-400">Total</p></div>
+                  <div className="bg-gray-700 p-0.5 sm:p-1 rounded-lg"><p className="text-sm sm:text-base font-bold">{attempted}</p><p className="text-[8px] sm:text-[10px] text-gray-400">Attempted</p></div>
+                  <div className="bg-green-700 p-0.5 sm:p-1 rounded-lg"><p className="text-sm sm:text-base font-bold">{answeredCorrectly}</p><p className="text-[8px] sm:text-[10px] text-green-200">Correct</p></div>
+                  <div className="bg-red-700 p-0.5 sm:p-1 rounded-lg"><p className="text-sm sm:text-base font-bold">{answeredIncorrectly}</p><p className="text-[8px] sm:text-[10px] text-red-200">Incorrect</p></div>
+                  <div className="bg-yellow-700 p-0.5 sm:p-1 rounded-lg col-span-2 md:col-span-1"><p className="text-sm sm:text-base font-bold">{unattempted}</p><p className="text-[8px] sm:text-[10px] text-yellow-200">Unattempted</p></div>
                 </div>
               </div>
               <div className="leaderboard p-2 sm:p-4">
@@ -961,112 +882,79 @@ const Battleground = () => {
                   <h3 className="text-lg sm:text-2xl font-semibold text-gray-50 mb-2 sm:mb-4 text-center">
                     Leaderboard ({totalQuestions} Questions)
                   </h3>
-                  {leaderboard.length > 0 ? (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-zinc-300 text-[8px] sm:text-xs">
-                        <thead>
-                          <tr className="border-b-2 border-gray-700">
-                            <th className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5 text-blue-300">Rank</th>
-                            <th className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5 text-blue-300">Username</th>
-                            <th className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5 text-blue-300">Score</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {leaderboard.map((entry, index) => (
-                            <tr key={index} className={`border-b border-gray-700 ${user.username === entry.username ? 'bg-blue-900/50' : ''}`}>
-                              <td className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5 font-bold">{index + 1}</td>
-                              <td className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5">{entry.username}</td>
-                              <td className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5">{entry.score.toFixed(2)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <div className="text-center">
-                      <p className="text-zinc-400 text-[8px] sm:text-xs mb-2">Leaderboard for {totalQuestions}-question test is currently empty.</p>
-                      <button
-                        onClick={() => fetchLeaderboard()}
-                        className="bg-blue-600 text-white px-4 py-1 rounded-full text-xs hover:bg-blue-700"
-                      >
-                        Retry
-                      </button>
-                    </div>
-                  )}
+                  {leaderboard.length > 0 ? (<div className="overflow-x-auto"><table className="w-full text-left text-zinc-300 text-[8px] sm:text-xs"><thead><tr className="border-b-2 border-gray-700"><th className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5 text-blue-300">Rank</th><th className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5 text-blue-300">Username</th><th className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5 text-blue-300">Score</th></tr></thead><tbody>{leaderboard.map((entry, index) => (<tr key={index} className={`border-b border-gray-700 ${user.username === entry.username ? 'bg-blue-900/50' : ''}`}><td className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5 font-bold">{index + 1}</td><td className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5">{entry.username}</td><td className="px-0.5 sm:px-1.5 py-0.5 sm:py-1.5">{entry.score.toFixed(2)}</td></tr>))}</tbody></table></div>) : (<div className="text-center"><p className="text-zinc-400 text-[8px] sm:text-xs mb-2">Leaderboard for {totalQuestions}-question test is currently empty.</p><button onClick={() => fetchLeaderboard()} className="bg-blue-600 text-white px-4 py-1 rounded-full text-xs hover:bg-blue-700">Retry</button></div>)}
                 </div>
               </div>
 
-              <div className="question-upbar" onClick={() => setShowPopup(prev => !prev)}>
-                <svg
-                  className="w-10 h-10 text-white hover:text-gray-300 transition-colors duration-200 cursor-pointer"
-                  viewBox="0 0 40 50"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  <line x1="0" y1="6" x2="40" y2="6" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
-                  <line x1="0" y1="18" x2="40" y2="18" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
-                  <line x1="0" y1="30" x2="40" y2="30" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
-                </svg>
-              </div>
+              {/* CORRECTED: This now uses setShowTestPopup to open the popup */}
+              {/* This is the NEW code for your Results Page */}
 
-              <div
-                className={`popup fixed bottom-0 left-0 w-full h-[50vh] shadow-lg overflow-y-auto ${
-                  showPopup ? 'translate-y-0' : 'translate-y-full'
-                  }`}
-              >
-                <div className="p-4 sm:p-6 flex flex-col items-center">
-                  <h3 className="text-3xl sm:text-4xl font-semibold text-gray-50 mb-8 -mt-2 whitespace-nowrap">
-                    Battleground Domain
-                  </h3>
-                  <div className="flex justify-between w-full gap-2 mb-32 px-4">
-                    {[10, 25, 50, 100].map((count) => {
-                      const isSelected = selectedQuestionCount === count;
-                      let buttonClass = `flex-1 px-4 py-2 rounded-full text-sm sm:text-base font-medium transition-all duration-300 transform hover:scale-105 border-2 border-transparent `;
+<div className="question-upbar" onClick={() => setShowTestPopup(prev => !prev)}>
+    <svg
+      className="w-10 h-10 text-white hover:text-gray-300 transition-colors duration-200 cursor-pointer"
+      viewBox="0 0 40 50"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <line x1="0" y1="6" x2="40" y2="6" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
+      <line x1="0" y1="18" x2="40" y2="18" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
+      <line x1="0" y1="30" x2="40" y2="30" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
+    </svg>
+</div>
 
-                      // =========== UPDATED COLOR LOGIC BLOCK (1/2) ===========
-                      if (count === 100) { // Gold for Full Length Test
-                        buttonClass += isSelected ? 'bg-amber-500 text-black border-amber-700' : 'bg-amber-400 text-black hover:bg-amber-500 hover:border-amber-700';
-                      } else if (count === 50) { // Silver for Half Length
-                        buttonClass += isSelected ? 'bg-slate-400 text-black border-slate-600' : 'bg-slate-300 text-black hover:bg-slate-400 hover:border-slate-600';
-                      } else if (count === 25) { // Bronze for Rapid Test
-                        buttonClass += isSelected ? 'bg-orange-400 text-black border-orange-600' : 'bg-orange-300 text-black hover:bg-orange-400 hover:border-orange-600';
-                      } else { // Green for Quick Test (count of 10)
-                        buttonClass += isSelected ? 'bg-green-600 text-white border-green-800' : 'bg-green-500 text-white hover:bg-green-600 hover:border-green-800';
-                      }
-                      // ===============================================
+<div
+  className={`popup fixed bottom-0 left-0 w-full h-[50vh] shadow-lg overflow-y-auto ${
+    showTestPopup ? 'translate-y-0' : 'translate-y-full'
+  }`}
+>
+  <div className="p-4 sm:p-6 flex flex-col items-center">
+    <h3 className="text-3xl sm:text-4xl font-semibold text-gray-50 mb-8 -mt-2 whitespace-nowrap">
+      Battleground Domain
+    </h3>
+    <div className="flex justify-between w-full gap-2 mb-32 px-4">
+      {[10, 25, 50, 100].map((count) => {
+        const isSelected = selectedQuestionCount === count;
+        let buttonClass = `flex-1 px-4 py-4 rounded-full text-sm sm:text-base font-medium transition-all duration-300 transform hover:scale-105 border-2 border-transparent `;
+        if (count === 100) { buttonClass += isSelected ? 'bg-amber-500 text-black border-amber-700' : 'bg-amber-400 text-black hover:bg-amber-500 hover:border-amber-700'; }
+        else if (count === 50) { buttonClass += isSelected ? 'bg-slate-400 text-black border-slate-600' : 'bg-slate-300 text-black hover:bg-slate-400 hover:border-slate-600'; }
+        else if (count === 25) { buttonClass += isSelected ? 'bg-orange-400 text-black border-orange-600' : 'bg-orange-300 text-black hover:bg-orange-400 hover:border-orange-600'; }
+        else { buttonClass += isSelected ? 'bg-green-600 text-white border-green-800' : 'bg-green-500 text-white hover:bg-green-600 hover:border-green-800'; }
+        return (
+          <button key={count} onClick={() => handleQuestionCountSelect(count)} className={buttonClass}>
+            {testLabels[count]}
+          </button>
+        );
+      })}
+    </div>
+    {/* The buttons have been moved out of this DIV */}
+  </div>
+</div>
 
-                      return (
-                        <button
-                          key={count}
-                          onClick={() => handleQuestionCountSelect(count)}
-                          className={buttonClass}
-                        >
-                          {testLabels[count]}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="flex justify-center w-full gap-40">
-                    <button
-                      onClick={startNewTest}
-                      disabled={!selectedQuestionCount}
-                      className={`px-6 py-2 rounded-full text-sm sm:text-base font-semibold transition-all duration-300 transform border-2 border-transparent ${
-                        selectedQuestionCount
-                          ? 'bg-blue-600 text-white hover:bg-sky-200 hover:text-sky-800 hover:border-sky-600 hover:scale-105'
-                          : 'bg-gray-500 text-gray-300 cursor-not-allowed'
-                        }`}
-                    >
-                      Start Test
-                    </button>
-                    <button
-                        onClick={handleReturnToSolutions}
-                        className="px-6 py-2 rounded-full text-sm sm:text-base font-semibold transition-all duration-300 transform border-2 border-transparent bg-blue-600 text-white hover:bg-sky-200 hover:text-sky-800 hover:border-sky-600 hover:scale-105"
-                    >
-                        View Solutions
-                    </button>
-                  </div>
-                </div>
-              </div>
+{/* The NEW fixed buttons are here, outside the popup */}
+{showTestPopup && (
+  <>
+    <button
+      onClick={startNewTest}
+      disabled={!selectedQuestionCount}
+      className={`fixed z-50 bottom-6  px-6 py-2 rounded-full text-sm sm:text-base font-semibold transition-all duration-300 transform border-2 border-transparent ${
+        selectedQuestionCount
+          ? 'bg-yellow-600 text-white hover:bg-sky-200 hover:text-sky-800 hover:border-sky-600 hover:scale-105'
+          : 'bg-gray-500 text-gray-300 cursor-not-allowed'
+      }`}
+       style={{ left: 'var(--button-left-position)' }}
+    >
+      Start New Test
+    </button>
+    <button
+      onClick={handleReturnToSolutions}
+      className="fixed z-50 bottom-6  px-6 py-2 rounded-full text-sm sm:text-base font-semibold transition-all duration-300 transform border-2 border-transparent bg-orange-600 text-white hover:bg-sky-200 hover:text-sky-800 hover:border-sky-600 hover:scale-105"
+      style={{ right: 'var(--button-right-position)' }}
+    >
+      View Solutions
+    </button>
+  </>
+)}
+
             </div>
           </div>
         </main>
@@ -1078,7 +966,22 @@ const Battleground = () => {
     <div className="min-h-screen bg-gray-900 text-white font-poppins overflow-hidden overscroll-none">
       <div className="fixed top-0 left-0 w-full h-12 flex justify-between items-center z-50">
         <style>
+          
           {`
+          :root {
+                /* This is the DEFAULT (mobile) position */
+                --button-left-position: 1rem;
+                --button-right-position: 1rem;
+              }
+
+              @media (min-width: 640px) {
+                :root {
+                  /* This is the OVERRIDE for big screens */
+                  --button-left-position: calc(50% - 250px);
+                  --button-right-position: calc(50% - 250px);
+                }
+              }
+
             .glass-button {
               background: transparent;
               border: none;
@@ -1125,28 +1028,21 @@ const Battleground = () => {
                 100% 100%
               );
             }
-
             @media (max-width: 639px) {
               .question-upbar {
-                width: 30%; /* EXAMPLE: Changed from 35% for a narrower mobile view */
+                width: 100%; /* EXAMPLE: Changed from 35% for a narrower mobile view */
                 clip-path: polygon(
-                  5% 0%,
-                  95% 0%,
-                  100% 100%,
-                  0% 100%
+                  0% 100%,
+                  0% 90%,
+                  40% 90%,
+                  44% 0%,
+                  56% 0%,
+                  60% 90%,
+                  100% 90%,
+                  100% 100%
                 );
               }
             }
-
-            /* Style for the icon inside (if you are using the three lines SVG) */
-            .question-upbar svg {
-              width: 30px; /* Adjust icon size as needed */
-              height: 30px;
-              fill: black; /* Adjust icon color as needed */
-              cursor: pointer;
-            }
-
-            /* Style for the icon inside (if you are using the three lines SVG) */
             .question-upbar svg {
               width: 30px; /* Adjust icon size as needed */
               height: 30px;
@@ -1158,29 +1054,6 @@ const Battleground = () => {
               background: none;
               border: none;
               transition: opacity 0.3s ease;
-            }
-            .question-upbar svg {
-              width: 24px;
-              height: 24px;
-              transition: color 0.2s ease;
-            }
-            .question-upbar button:hover svg {
-              color: #d1d5db;
-            }
-            .filter-bar::-webkit-scrollbar {
-              height: 4px;
-            }
-            .filter-bar::-webkit-scrollbar-track {
-              background: transparent;
-            }
-            .filter-bar::-webkit-scrollbar-thumb {
-              background: #4b5563;
-              border-radius: 2px;
-              border: none;
-            }
-            .filter-bar {
-              scrollbar-width: thin;
-              scrollbar-color: #4b5563 transparent;
             }
             .popup {
               transition: transform 0.3s ease-out;
@@ -1436,85 +1309,78 @@ const Battleground = () => {
                 </>
               )}
 
-              <div className="question-upbar" onClick={() => setShowTestPopup(prev => !prev)}>
-                <svg
-                  className="w-10 h-10 text-white hover:text-gray-300 transition-colors duration-200 cursor-pointer"
-                  viewBox="0 0 40 50"
-                  fill="none"
-                  xmlns="http://www.w3.org/2000/svg"
-                >
-                  <line x1="0" y1="6" x2="40" y2="6" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
-                  <line x1="0" y1="18" x2="40" y2="18" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
-                  <line x1="0" y1="30" x2="40" y2="30" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
-                </svg>
-              </div>
+              {/* This is the NEW code for your Test-Taking Page */}
 
-              <div
-                className={`popup fixed bottom-0 left-0 w-full h-[50vh] shadow-lg overflow-y-auto ${
-                  showTestPopup ? 'translate-y-0' : 'translate-y-full'
-                  }`}
-              >
-                <div className="p-4 sm:p-6 flex flex-col items-center">
-                  <h3 className="text-3xl sm:text-4xl font-semibold text-gray-50 mb-8 -mt-2 whitespace-nowrap">
-                    Battleground Domain
-                  </h3>
-                  <div className="flex justify-between w-full gap-2 mb-32 px-4">
-                    {[10, 25, 50, 100].map((count) => {
-                      const isSelected = selectedQuestionCount === count;
-                      let buttonClass = `flex-1 px-4 py-2 rounded-full text-sm sm:text-base font-medium transition-all duration-300 transform hover:scale-105 border-2 border-transparent `;
+<div className="question-upbar" onClick={() => setShowTestPopup(prev => !prev)}>
+    <svg
+      className="w-10 h-10 text-white hover:text-gray-300 transition-colors duration-200 cursor-pointer"
+      viewBox="0 0 40 50"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+        <line x1="0" y1="6" x2="40" y2="6" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
+        <line x1="0" y1="18" x2="40" y2="18" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
+        <line x1="0" y1="30" x2="40" y2="30" stroke="currentColor" strokeWidth="6" strokeLinecap="round" />
+    </svg>
+</div>
 
-                      // =========== UPDATED COLOR LOGIC BLOCK (2/2) ===========
-                      if (count === 100) { // Gold for Full Length Test
-                        buttonClass += isSelected ? 'bg-amber-500 text-black border-amber-700' : 'bg-amber-400 text-black hover:bg-amber-500 hover:border-amber-700';
-                      } else if (count === 50) { // Silver for Half Length
-                        buttonClass += isSelected ? 'bg-slate-400 text-black border-slate-600' : 'bg-slate-300 text-black hover:bg-slate-400 hover:border-slate-600';
-                      } else if (count === 25) { // Bronze for Rapid Test
-                        buttonClass += isSelected ? 'bg-orange-400 text-black border-orange-600' : 'bg-orange-300 text-black hover:bg-orange-400 hover:border-orange-600';
-                      } else { // Green for Quick Test (count of 10)
-                        buttonClass += isSelected ? 'bg-green-600 text-white border-green-800' : 'bg-green-500 text-white hover:bg-green-600 hover:border-green-800';
-                      }
-                      // ===============================================
+<div className={`popup fixed bottom-0 left-0 w-full h-[50vh] shadow-lg overflow-y-auto ${ showTestPopup ? 'translate-y-0' : 'translate-y-full'}`}>
+    <div className="p-4 sm:p-6 flex flex-col items-center">
+        <h3 className="text-3xl sm:text-4xl font-semibold text-gray-50 mb-8 -mt-2 whitespace-nowrap">
+            Battleground Domain
+        </h3>
+        <div className="flex justify-between w-full gap-2 mb-32 px-4">
+            {[10, 25, 50, 100].map((count) => {
+              const isSelected = selectedQuestionCount === count;
+              let buttonClass = `flex-1 px-4 py-4 rounded-full text-sm sm:text-base font-medium transition-all duration-300 transform hover:scale-105 border-2 border-transparent `;
+              if (count === 100) { buttonClass += isSelected ? 'bg-amber-500 text-black border-amber-700' : 'bg-amber-400 text-black hover:bg-amber-500 hover:border-amber-700'; }
+              else if (count === 50) { buttonClass += isSelected ? 'bg-slate-400 text-black border-slate-600' : 'bg-slate-300 text-black hover:bg-slate-400 hover:border-slate-600'; }
+              else if (count === 25) { buttonClass += isSelected ? 'bg-orange-400 text-black border-orange-600' : 'bg-orange-300 text-black hover:bg-orange-400 hover:border-orange-600'; }
+              else { buttonClass += isSelected ? 'bg-green-600 text-white border-green-800' : 'bg-green-500 text-white hover:bg-green-600 hover:border-green-800'; }
+              return (
+                  <button key={count} onClick={() => handleQuestionCountSelect(count)} className={buttonClass}>
+                      {testLabels[count]}
+                  </button>
+              );
+            })}
+        </div>
+        {/* The buttons have been moved out of this DIV */}
+    </div>
+</div>
 
-                      return (
-                        <button
-                          key={count}
-                          onClick={() => handleQuestionCountSelect(count)}
-                          className={buttonClass}
-                        >
-                          {testLabels[count]}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="flex justify-center w-full gap-40">
-                    <button
-                      onClick={startNewTest}
-                      disabled={!selectedQuestionCount}
-                      className={`px-6 py-2 rounded-full text-sm sm:text-base font-semibold transition-all duration-300 transform border-2 border-transparent ${
-                        selectedQuestionCount
-                          ? 'bg-blue-600 text-white hover:bg-sky-200 hover:text-sky-800 hover:border-sky-600 hover:scale-105'
-                          : 'bg-gray-500 text-gray-300 cursor-not-allowed'
-                        }`}
-                    >
-                      Start Test
-                    </button>
-                    <button
-                      onClick={() => {
-                        setShowTestPopup(false);
-                        setShowResultsPage(true);
-                      }}
-                      disabled={score === null}
-                      className={`px-6 py-2 rounded-full text-sm sm:text-base font-semibold transition-all duration-300 transform border-2 border-transparent ${
-                        score !== null
-                          ? 'bg-blue-600 text-white hover:bg-sky-200 hover:text-sky-800 hover:border-sky-600 hover:scale-105'
-                          : 'bg-gray-500 text-gray-300 cursor-not-allowed'
-                        }`}
-                    >
-                      View Results
-                    </button>
-                  </div>
-                </div>
-              </div>
+{/* The NEW fixed buttons are here, outside the popup */}
+{showTestPopup && (
+  <>
+    <button
+      onClick={startNewTest}
+      disabled={!selectedQuestionCount}
+      className={`fixed z-50 bottom-6  px-6 py-2 rounded-full text-sm sm:text-base font-semibold transition-all duration-300 transform border-2 border-transparent ${
+        
+        selectedQuestionCount
+          ? 'bg-yellow-600 text-white hover:bg-sky-200 hover:text-sky-800 hover:border-sky-600 hover:scale-105'
+          : 'bg-gray-500 text-gray-300 cursor-not-allowed'
+      }`}
+        style={{ left: 'var(--button-left-position)' }}
+    >
+      Start Test
+    </button>
+    <button
+      onClick={() => {
+        setShowTestPopup(false);
+        setShowResultsPage(true); 
+      }}
+      disabled={score === null}
+      className={`fixed z-50 bottom-6  px-6 py-2 rounded-full text-sm sm:text-base font-semibold transition-all duration-300 transform border-2 border-transparent ${
+        score !== null
+          ? 'bg-orange-600 text-white hover:bg-sky-200 hover:text-sky-800 hover:border-sky-600 hover:scale-105'
+          : 'bg-gray-500 text-gray-300 cursor-not-allowed'
+      }`}
+      style={{ right: 'var(--button-right-position)' }}
+    >
+      View Results
+    </button>
+  </>
+)}
             </>
           ) : testStarted && questions.length > 0 ? (
             <div className="p-4 bg-red-600 border border-gray-700 rounded-lg mx-auto max-w-sm sm:max-w-md text-center">
@@ -1603,46 +1469,72 @@ const Battleground = () => {
             )}
 
             <div className="flex-1 flex flex-col relative">
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(1.75rem,1fr))] gap-1 sm:gap-1.5 mb-4">
-                {Array.from({ length: totalQuestions })
-                  .map((_, i) => i)
-                  .filter(i => filter === "all" || questionStatuses[i] === filter)
-                  .map((actualIndex) => {
-                    const status = questionStatuses[actualIndex] || "unattempted";
-                    const isCurrent = actualIndex === currentQuestionIndex && !showExplanation;
-                    let colorClass = score !== null
-                      ? status === "correct"
-                        ? "bg-green-500"
-                        : status === "wrong"
-                          ? "bg-red-500"
-                          : "bg-white"
-                      : actualIndex <= maxQuestionReached
-                        ? userAnswers[actualIndex]
-                          ? "bg-blue-200"
-                          : "bg-white"
-                        : "bg-gray-200";
+              {/* This is the NEW code for the question circles grid */}
+<div
+  className={`grid mb-4 ${
+    totalQuestions === 10
+      ? 'grid-cols-3 gap-3 gap-x-3 gap-y-5' // If test has 10 questions, use 3 columns.
+      : totalQuestions === 25
+        ? 'grid-cols-5 gap-2 gap-x-3 gap-y-9' // ELSE IF test has 25 questions, use 5 columns.
+      : totalQuestions === 50
+      ? 'grid-cols-5 gap-2 gap-x-3 gap-y-3'
+      : totalQuestions === 100
+        ? 'grid-cols-7 gap-2 gap-x-3 gap-y-2'
+        : 'grid-cols-[repeat(auto-fill,minmax(2rem,1fr))] gap-2' // ELSE, for all others (50, 100), use the default.
+  }`}
+>
+  {Array.from({ length: totalQuestions })
+    .map((_, i) => i)
+    .filter(i => filter === "all" || questionStatuses[i] === filter)
+    .map((actualIndex) => {
+      const status = questionStatuses[actualIndex] || "unattempted";
+      const isCurrent = actualIndex === currentQuestionIndex && !showExplanation;
+      
+      let colorClass = score !== null
+        ? status === "correct"
+          ? "bg-green-500"
+          : status === "wrong"
+            ? "bg-red-500"
+            : "bg-white"
+        : actualIndex <= maxQuestionReached
+          ? userAnswers[actualIndex]
+            ? "bg-blue-200"
+            : "bg-white"
+          : "bg-gray-200";
 
-                    if (isCurrent && score !== null) {
-                      colorClass = `${colorClass} ring-2 ring-white`;
-                    }
+      if (isCurrent && score !== null) {
+        colorClass = `${colorClass} ring-2 ring-white`;
+      }
 
-                    return (
-                      <div
-                        key={actualIndex}
-                        className={`w-5 h-5 sm:w-6 sm:h-6 rounded-md ${colorClass} flex items-center justify-center text-gray-900 text-[9px] sm:text-[10px] font-semibold shadow-sm transition-transform duration-200 cursor-pointer hover:scale-105`}
-                        onClick={() => {
-                          if (actualIndex < questions.length) {
-                            setCurrentQuestionIndex(actualIndex);
-                            setSelectedOption(userAnswers[actualIndex] || "");
-                            setShowExplanation(false);
-                          }
-                        }}
-                      >
-                        {actualIndex + 1}
-                      </div>
-                    );
-                  })}
-              </div>
+      // This new variable sets the size of the circles based on the test length
+      const sizeClass = totalQuestions === 10
+        ? 'w-12 h-12 text-lg' // Big circles for 10-question tests
+       : totalQuestions === 25
+    ? 'w-11 h-11 text-base' // NEW: Big size for 25-question tests
+        : totalQuestions === 50
+          ? 'w-10 h-10 text-base' // Standard size for 50-question tests
+          : totalQuestions === 100
+            ? 'w-7 h-7 text-sm' // Smaller circles for 100-question
+    : 'w-8 h-8 text-sm';     // Standard (but larger than before) circles for other tests
+
+      return (
+        <div
+          key={actualIndex}
+          // The size classes are now dynamic
+          className={`${sizeClass} ${colorClass} rounded-md flex items-center justify-center text-gray-900 font-semibold shadow-sm transition-transform duration-200 cursor-pointer hover:scale-105`}
+          onClick={() => {
+            if (actualIndex < questions.length) {
+              setCurrentQuestionIndex(actualIndex);
+              setSelectedOption(userAnswers[actualIndex] || "");
+              setShowExplanation(false);
+            }
+          }}
+        >
+          {actualIndex + 1}
+        </div>
+      );
+    })}
+</div>
               {score === null ? (
                 <button
                   onClick={submitTest}
@@ -1665,5 +1557,4 @@ const Battleground = () => {
     </div>
   );
 };
-
 export default Battleground;

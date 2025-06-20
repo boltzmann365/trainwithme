@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../App";
 
-const ArtAndCulture = () => {
+const VisionIasMay2025 = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [testStarted, setTestStarted] = useState(false);
@@ -116,7 +116,7 @@ const ArtAndCulture = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId,
-          book: "ArtAndCulture",
+          book: "VisionIasMayMagazine",
           requestedCount: validRequestedCount,
         }),
       });
@@ -1645,4 +1645,4 @@ const ArtAndCulture = () => {
   );
 };
 
-export default ArtAndCulture;
+export default VisionIasMay2025;
